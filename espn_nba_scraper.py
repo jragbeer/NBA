@@ -15,13 +15,18 @@ import dask.delayed
 import sqlite3
 from selenium.webdriver.chrome.options import Options as chrome_options
 import pymongo
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException
 
 
-def grab_soup(url_, browser="firefox"):
+def grab_soup(url_, browser="firefox", indicator=''):
     """
     This function enables a driver (using Firefox or Chrome), goes to the URL, and retrieves the data after the JS is loaded.
     :param url_: url to go to to retrieve data
     :param browser: browser to use, defaults to firefox (requires geckodriver.exe on path)
+    :param indicator: specific page that is being looked at, waits for certain elements to load depending on this value.
     :return:
     soup - the data of the page
     driver - the browser (process) instance
@@ -49,10 +54,23 @@ def grab_soup(url_, browser="firefox"):
         driver = webdriver.Firefox(options=firefoxOptions)
 
     driver.get(url_)  # go to the URL
+    # wait up to 7 seconds for element to load
+    if indicator == 'game_info':
+        try:
+            my_elem = WebDriverWait(driver, 7).until(EC.presence_of_element_located((By.CLASS_NAME, 'attendance')))
+        except TimeoutException:
+            print("Loading took too much time!")
+    elif indicator == 'matchup':
+        try:
+            my_elem = WebDriverWait(driver, 7).until(EC.presence_of_element_located((By.ID, 'gamepackage-matchup')))
+        except TimeoutException:
+            print("Loading took too much time!")
+    time.sleep(0.5)
     html = driver.page_source
-    time.sleep(1)  # sleep for 1 second  to ensure all JS scripts are loaded
+    # sleep for 1 second  to ensure all JS scripts are loaded
     html = driver.execute_script("return document.body.outerHTML;")  # execute javascript code
     soup_ = bs.BeautifulSoup(html, 'lxml')  # read the data as html (using lxml driver)
+    # pprint(soup_)
     return soup_, driver
 
 
@@ -179,7 +197,7 @@ def get_all_gameids_by_year(year_range=(2017, 2018, 2019, 2020, 2021)):
 @dask.delayed
 def grab_matchup_info(gameid):
     matchup_url = f"https://www.espn.com/nba/matchup?gameId={gameid}"
-    soup, c = grab_soup(matchup_url, 'chrome')
+    soup, c = grab_soup(matchup_url, 'chrome', "matchup")
     columns = []
     info = []
     table = soup.find_all('table')
@@ -204,23 +222,50 @@ def grab_matchup_info(gameid):
 @dask.delayed
 def grab_game_info(gameid):
     matchup_url = f"https://www.espn.com/nba/game?gameId={gameid}"
-    soup, c = grab_soup(matchup_url, 'chrome')
+    soup, c = grab_soup(matchup_url, 'chrome', 'game_info')
+    try:
+        date = soup.find_all('span', class_= 'game-date')
+        game_date = list(date)[0].text
+    except Exception as e:
+        game_date = 'N/A'
+    try:
+        timee = soup.find_all('span', class_= 'time game-time')
+        game_time = list(timee)[0].text
+    except Exception as e:
+        game_time = 'N/A'
     try:
         info = soup.find_all('div', class_= 'game-info-note capacity')
         attendance = [x.text for x in info]
+        if len(attendance) == 1:
+            attendance.append(attendance[0])
+    except Exception as e:
+        attendance = [0,0]
+    try:
         network = soup.find_all('div', class_= 'game-network')
         netw = list(network)[0].text.strip()
-        date = soup.find_all('span', class_= 'game-date')
-        game_date = list(date)[0].text
-        timee = soup.find_all('span', class_= 'time game-time')
-        game_time = list(timee)[0].text
-        c.close()
-        return {'game_id':gameid, 'network':netw, 'time':game_time, 'date':game_date, "attendance":{"attendance":attendance[0], 'capacity':attendance[1]}}
     except Exception as e:
+        print('network', str(e))
+        netw = 'N/A'
+    output = {'game_id': gameid, 'network': netw, 'time': game_time, 'date': game_date,
+     "attendance": {"attendance": attendance[0], 'capacity': attendance[1]}}
+    try:
         c.close()
+    except:
+        pass
+    try:
+        return output
+    except:
         return 1
 
+
 def grab_data_parallel(func):
+    """
+
+    This function runs the *func* with dask. It then puts the data into the database, depending on which function was executed.
+
+    :param func: function to run in parallel with dask
+    :return: nothing
+    """
     # query all table names
     func_name = repr(func).split("'")[1].split('-')[0]
     if func_name == "grab_matchup_info":
@@ -231,16 +276,18 @@ def grab_data_parallel(func):
         game_ids = set(x['game_id'] for x in all_docs)
     else:
         game_ids = []
-    print(len(game_ids))
+    print(len(game_ids)) # print how many game_ids are in DB
     other = []
     final = []
+
+    # all possible game_ids in dataset
     games_list = []
     for yr in range(2017, 2021):
         for szn in ['playoffs', 'regular']:
             for team in teams:
                 games_list.append(data[yr][team][szn])
-    # all possible game_ids in dataset
     games_list = list(set([item.split('?')[1] for sublist in games_list for item in sublist]))
+
     # filter so that array = all game_ids without a record in database
     array = [int(i.split('=')[1]) for i in games_list if int(i.split('=')[1]) not in game_ids]
     for t, i in enumerate(array):
@@ -261,11 +308,12 @@ def grab_data_parallel(func):
             print(e)
             continue
         final.append(dataframe)
-        if len(final) == 2000:
+        if len(final) == 2000: # stop before entire *array* is done
             break
-
+    # execute in parallel, showing one of the objects
     result = dask.compute(final)[0]
     pprint(result[0])
+    # input data into one of the databases
     if func_name == "grab_matchup_info":
         for num, each in enumerate(other):
             try:
@@ -279,16 +327,17 @@ def grab_data_parallel(func):
             if isinstance(each, int):
                 continue
             collection.insert_one(each)
+    # close the driver if it's still open
     try:
         c.close()
     except:
         pass
-    q = (datetime.datetime.now()-timee)
-    print(q)
+    end_time = (datetime.datetime.now()-timee)
+    print(end_time)
     print()
 
 if __name__ == '__main__':
-
+    # Set-up
     cluster = LocalCluster()
     client = Client(cluster)
 
@@ -336,5 +385,6 @@ if __name__ == '__main__':
     db = mongo_client['NBA']
     collection = db['basic_game_info']
 
+    # main function
     grab_data_parallel(grab_game_info)
 
