@@ -65,6 +65,12 @@ def grab_soup(url_, browser="firefox", indicator=''):
             my_elem = WebDriverWait(driver, 7).until(EC.presence_of_element_located((By.ID, 'gamepackage-matchup')))
         except TimeoutException:
             print("Loading took too much time!")
+    elif indicator == 'playbyplay':
+        try:
+            my_elem = WebDriverWait(driver, 7).until(EC.presence_of_element_located((By.ID, "gamepackage-play-by-play")))
+        except TimeoutException:
+            print("Loading took too much time!")
+
     time.sleep(0.5)
     html = driver.page_source
     # sleep for 1 second  to ensure all JS scripts are loaded
@@ -239,15 +245,20 @@ def grab_game_info(gameid):
         if len(attendance) == 1:
             attendance.append(attendance[0])
     except Exception as e:
-        attendance = [0,0]
+        attendance = [0, 0]
     try:
         network = soup.find_all('div', class_= 'game-network')
         netw = list(network)[0].text.strip()
     except Exception as e:
         print('network', str(e))
         netw = 'N/A'
-    output = {'game_id': gameid, 'network': netw, 'time': game_time, 'date': game_date,
-     "attendance": {"attendance": attendance[0], 'capacity': attendance[1]}}
+    try:
+        output = {'game_id': gameid, 'network': netw, 'time': game_time, 'date': game_date,
+         "attendance": {"attendance": attendance[0],
+                        'capacity': attendance[1]}}
+    except:
+        output = {'game_id': gameid, 'network': netw, 'time': game_time, 'date': game_date,
+         "attendance": {"attendance": 0, 'capacity': 0}}
     try:
         c.close()
     except:
@@ -257,6 +268,49 @@ def grab_game_info(gameid):
     except:
         return 1
 
+@dask.delayed
+def grab_playbyplay_info(gameid):
+    matchup_url = f"https://www.espn.com/nba/playbyplay?gameId={gameid}"
+    soup, c = grab_soup(matchup_url, 'chrome', 'playbyplay')
+    accordion = soup.find_all('li', class_='accordion-item')
+    try:
+        dfs = []
+        for x in accordion:
+            qtr = x.find_all('h3')[0]
+            columns = []
+            info = []
+            imgs = []
+            for tbl in x.find_all('table'):
+                for y in tbl.find_all('thead'):
+                    for a in y.find_all('th'):
+                        columns.append(a.text.lower())
+                for y in tbl.find_all('tbody'):
+                    for a in y.find_all('td'):
+                        info.append(a.text.strip())
+                        for k in a.find_all('img'):
+                            imgs.append(str(k).split('teamlogos/nba/500/')[1].split('.')[0])
+                        continue
+            dat = [[info[t] for t in range(5)]] + [[info[t] for t in range(i-5, i)] for i in range(5, len(info), 5)]
+            dat = [i[:4] for i in dat]
+            for i, each in enumerate(dat):
+                each[1] = imgs[i]
+                if '.' in each[0]:
+                    each[0] = f"0:{str(each[0].split('.')[0]).zfill(2)}"
+            df = pd.DataFrame.from_records(data=dat, columns=columns,)
+            df['quarter'] = qtr.text.strip()[:4].upper()
+            dfs.append(df)
+        total_game_df = pd.concat(dfs)
+    except Exception as ie:
+        print(str(ie))
+        c.close()
+    try:
+        c.close()
+    except:
+        pass
+    try:
+        return total_game_df
+    except:
+        return 1
 
 def grab_data_parallel(func):
     """
@@ -274,6 +328,9 @@ def grab_data_parallel(func):
     elif func_name == "grab_game_info":
         all_docs = collection.find({})
         game_ids = set(x['game_id'] for x in all_docs)
+    elif func_name == "grab_playbyplay_info":
+        game_ids = pd.read_sql("""SELECT name FROM sqlite_master WHERE type ='table' AND name NOT LIKE 'sqlite_%' """, engine_playbyplay)['name'].to_list()
+        game_ids = set(int(x.replace('gameid_', '')) for x in game_ids)
     else:
         game_ids = []
     print(len(game_ids)) # print how many game_ids are in DB
@@ -327,6 +384,14 @@ def grab_data_parallel(func):
             if isinstance(each, int):
                 continue
             collection.insert_one(each)
+    elif func_name == "grab_playbyplay_info":
+        for num, each in enumerate(other):
+            try:
+                result[num].to_sql(f"gameid_{each}", engine_playbyplay, if_exists='replace', index=False)
+            except IndexError:
+                pass
+            except AttributeError:
+                pass
     # close the driver if it's still open
     try:
         c.close()
@@ -378,13 +443,15 @@ if __name__ == '__main__':
     # dictionary with all games for each team between 2016-2017 and 2020 seasons
     pickle_in = open("all_games_all_years.pickle","rb")
     data = pickle.load(pickle_in)
-    #SQLITE3 DATABASE
+    #SQLITE3 DATABASE (matchup)
     engine = sqlite3.connect(path + 'nba_matchup_data.db')
+    #SQLITE3 DATABASE (play by play)
+    engine_playbyplay = sqlite3.connect(path + 'nba_playbyplay_data.db')
     #MONGODB DATABASE
     mongo_client = pymongo.MongoClient('localhost', 27017)
     db = mongo_client['NBA']
     collection = db['basic_game_info']
 
     # main function
-    grab_data_parallel(grab_game_info)
+    grab_data_parallel(grab_playbyplay_info)
 
