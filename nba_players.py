@@ -7,7 +7,7 @@ from datetime import timezone
 from bokeh.plotting import figure, show, gmap
 from bokeh.models import BasicTickFormatter, HoverTool, BoxSelectTool, BoxZoomTool, ResetTool, Span, OpenURL,FixedTicker, CustomJS, DatetimeTickFormatter, GMapOptions, LinearColorMapper, LabelSet
 from bokeh.models import NumeralTickFormatter, WheelZoomTool, PanTool, SaveTool, ColumnDataSource, LinearAxis, Range1d, FuncTickFormatter,DataRange1d , Band, SingleIntervalTicker
-from bokeh.models.widgets import Select, RadioGroup, DataTable, StringFormatter, TableColumn, NumberFormatter, Button, CheckboxGroup, Div, LayoutDOM, CheckboxButtonGroup
+from bokeh.models.widgets import Select, RadioGroup, DataTable, StringFormatter, TableColumn, NumberFormatter, Button, CheckboxGroup, Div,  CheckboxButtonGroup
 from bokeh.layouts import widgetbox, row, column, gridplot, layout
 from bokeh.io import curdoc
 from bokeh.palettes import Purples, BuPu, OrRd, viridis
@@ -101,10 +101,11 @@ def updateplayer(attr, old, new):
     update(data, str(new), teamlistp)
 def update(data_, new_, teamlistp):
     global imageglyph
+    global ts_span
+
     new_selected_player_df = cleanplayer(data_, str(new_))
 
     yearsp = [x1[1] for x1 in new_selected_player_df.index.values]
-    ppgp = new_selected_player_df['ppg']
     rpgp = new_selected_player_df['rpg']
     drpgp = new_selected_player_df['drpg']
     orpgp = new_selected_player_df['orpg']
@@ -115,7 +116,6 @@ def update(data_, new_, teamlistp):
     orbavgp = new_selected_player_df['orbavg']
     drbavgp = new_selected_player_df['drbavg']
 
-    perp = new_selected_player_df['PER']
     peravgp = [new_selected_player_df['PER'].sum() / len(yearsp) for y in range(len(yearsp))]
 
     # player_ftap = new_selected_player_df['FTA'].sum()
@@ -139,64 +139,57 @@ def update(data_, new_, teamlistp):
     z.y_range.end = apgp.max() + 1
     i.y_range.start = yearsp[0] - 1
     i.y_range.end = yearsp[-1] + 1
-    win_shares_source.data= win_shares_all(data_, first_year, last_year, new_).data
-    global ts_span
-    ts_span.visible = False
-    current_player_tsp, ts_playersp, ts_percentp = true_shooting(str(new_), data, first_year, last_year)
+    win_shares_source.data= dict(win_shares_all(data_, first_year, last_year, new_).data)
 
-    ts_span = Span(location=current_player_tsp * 0.01, dimension='width', line_color='#f16913', line_dash='solid',
-                   line_width=5, line_alpha=0.7, name = 'ts_span')
-    ts.add_layout(ts_span)
+    current_player_tsp, ts_playersp, ts_percentp = true_shooting(str(new_), data, first_year, last_year)
+    ts_span.location=current_player_tsp * 0.01
 
     all_nba_ptsp, all_nba_astsp, all_nba_rebsp, all_nba_perp = all_nba_avg_lines(data_, first_year, last_year)
-    download_source.data = ColumnDataSource(new_selected_player_df).data
 
-    sourceppg.data = ColumnDataSource(data=dict(x=yearsp, y=ppgp, avg=ptsavgp, nbaavg=all_nba_ptsp,
+    sourceppg.data = dict(x=yearsp, y=new_selected_player_df['ppg'], avg=ptsavgp, nbaavg=all_nba_ptsp,
                                                 label_avg=[ptsavgp[0], all_nba_ptsp[0]] + [0 for x in
                                                                                            range(len(yearsp) - 2)],
                                                 names=['Player Avg', 'NBA Avg'] + ['' for x in
                                                                                    range(len(yearsp) - 2)],
                                                 label_spots=[yearsp[0], yearsp[0]] + [yearsp[0] for x in
-                                                                                     range(len(yearsp) - 2)])).data
+                                                                                     range(len(yearsp) - 2)])
 
-    map_figure_source.data = ColumnDataSource(
-        data=dict(lat=[x[3] for x in teamlistp], lon=[x[4] for x in teamlistp],
-                  city=[x[2] for x in teamlistp])).data
-    sourceper.data = ColumnDataSource(data=dict(x=yearsp, a=perp, avg=peravgp, nbaavg=all_nba_perp,
-                                                label_avg=[peravgp[0], all_nba_perp[0]] + [0 for x in
-                                                                                           range(len(yearsp) - 2)],
+    map_figure_source.data = dict(lat=[x[3] for x in teamlistp], lon=[x[4] for x in teamlistp],
+                  city=[x[2] for x in teamlistp])
+    sourceper.data = dict(x=yearsp, a=new_selected_player_df['PER'], avg=peravgp, nbaavg=all_nba_perp,
+                                                label_avg=[peravgp[0], all_nba_perp[0]] + [0 for x in range(len(yearsp) - 2)],
                                                 names=['Player Avg', 'NBA Avg'] + ['' for x in
                                                                                    range(len(yearsp) - 2)],
                                                 label_spots=[yearsp[0], yearsp[0]] + [yearsp[0] for x in
-                                                                                      range(len(yearsp) - 2)])).data
-    sourcerpg.data = ColumnDataSource(
-        data=dict(x=yearsp, o=orpgp, d=drpgp, t=rpgp, avgt=rebavgp, avgo=orbavgp, avgd=drbavgp,
+                                                                                      range(len(yearsp) - 2)])
+    sourcerpg.data = dict(x=yearsp, o=orpgp, d=drpgp, t=rpgp, avgt=rebavgp, avgo=orbavgp, avgd=drbavgp,
                   nbaavg=all_nba_rebsp,
                   label_avg=[rebavgp[0], all_nba_rebsp[0]] + [0 for x in range(len(yearsp) - 2)],
                   names=['Player Avg', 'NBA Avg'] + ['' for x in range(len(yearsp) - 2)],
-                  label_spots=[yearsp[0], yearsp[0]] + [yearsp[0] for x in range(len(yearsp) - 2)])).data
-    sourceapg.data = ColumnDataSource(data=dict(x=yearsp, a=apgp, avg=astavgp, nbaavg=all_nba_astsp,
+                  label_spots=[yearsp[0], yearsp[0]] + [yearsp[0] for x in range(len(yearsp) - 2)])
+    sourceapg.data = dict(x=yearsp, a=apgp, avg=astavgp, nbaavg=all_nba_astsp,
                                                 label_avg=[astavgp[0], all_nba_astsp[0]] + [0 for x in
                                                                                             range(len(yearsp) - 2)],
                                                 names=['Player Avg', 'NBA Avg'] + ['' for x in
                                                                                    range(len(yearsp) - 2)],
                                                 label_spots=[yearsp[0], yearsp[0]] + [yearsp[0] for x in
-                                                                                      range(len(yearsp) - 2)])).data
+                                                                                      range(len(yearsp) - 2)])
 
     stlavgp = new_selected_player_df['STL'].sum() / new_selected_player_df['G'].sum()
     blkavgp = new_selected_player_df['BLK'].sum() / new_selected_player_df['G'].sum()
 
-    defenseallsource.data = ColumnDataSource(
-        data=dict(stl=all_stealp, blk=all_blockp, color=['blue'] * len(all_blockp))).data
-    defenseplayersource.data = ColumnDataSource(data=dict(stl=[stlavgp], blk=[blkavgp], color=['firebrick'])).data
+    defenseallsource.data = dict(ColumnDataSource(
+        data=dict(stl=all_stealp, blk=all_blockp, color=['blue'] * len(all_blockp))).data)
+    defenseplayersource.data = dict(ColumnDataSource(data=dict(stl=[stlavgp], blk=[blkavgp], color=['firebrick'])).data)
 
     imageglyph.visible = False
-    name = "{}.png".format(new_.lower().replace(' ', '_'))
+    name_to_use = new_.lower().replace(' ', '_')
+    name = f"{name_to_use}.png"
     if name in list_of_images:
-        imageglyph = img.image_url(url=['nba/static/images/{}.png'.format(new_.lower().replace(' ', '_'))], x=0, y=0,
+        imageglyph = img.image_url(url=['nba/static/images/{}.png'.format(name_to_use)], x=0, y=0,
                                    w=369, h=834, anchor="bottom_left")
     else:
-        imageglyph = img.image_url(url=['nba/static/images/nbalogo.png'.format(new_.lower().replace(' ', '_'))],
+        imageglyph = img.image_url(url=['nba/static/images/nbalogo.png'],
                                    x=100,
                                    y=0, w=180, h=700, anchor="bottom_left")
     div.text = makediv(new_selected_player_df, [x[1] for x in teamlistp])
@@ -275,14 +268,13 @@ def update_avg_line(new):
         labels_per.visible = False
         nba_avglinei.visible = False
 def make_heatmap(fg, ft, from3):
-
     fg = fg*100
     ft = ft*100
     from3 = from3*100
-    hmapsqsource.data = ColumnDataSource(data=(dict(x=[-1], y=[0], z=[6], i=[2], color=['red'], area=['3P'], num = [from3]))).data
-    hmapellipsesource.data = ColumnDataSource(data=(dict(x=[1], y=[0], z=[7], i=[1.55], color=['red'], area=['2P'], num = [fg]))).data
-    hmaprectsource.data = ColumnDataSource(data=(dict(x=[0], y=[0], z=[2], i=[0.85], color=['red'], area=['2P'], num = [fg]))).data
-    hmapwedgesource.data = ColumnDataSource(data=(dict(x=[-1], y=[0], z=[0.98], i=[3 * np.pi / 2], u=[np.pi / 2], color=['red'], area=['FT'], num = [ft]))).data
+    hmapsqsource.data = dict(x=[-1], y=[0], z=[6], i=[2], color=['red'], area=['3P'], num = np.array([from3]))
+    hmapellipsesource.data = dict(x=[1], y=[0], z=[7], i=[1.55], color=['red'], area=['2P'], num = np.array([fg]))
+    hmaprectsource.data = dict(x=[0], y=[0], z=[2], i=[0.85], color=['red'], area=['2P'], num = np.array([fg]))
+    hmapwedgesource.data = dict(x=[-1], y=[0], z=[0.98], i=np.array([3 * np.pi / 2]), u=np.array([np.pi / 2]), color=['red'], area=['FT'], num = np.array([ft]))
 def defense_scatter_all(inputdf, year1, year2):
     df = inputdf.copy()
     df = df[(df['Year'] >= year1) & (df['Year'] <= year2)]
@@ -291,13 +283,11 @@ def defense_scatter_all(inputdf, year1, year2):
     each_player_blk = df.groupby(['Player'])['BLK'].sum()
     each_player_g = df.groupby(['Player'])['G'].sum()
 
-
     all_blks = []
     all_stls = []
     for x in each_player_blk.index:
         all_blks.append(each_player_blk[x]/each_player_g[x])
         all_stls.append(each_player_stl[x]/each_player_g[x])
-
     return all_blks, all_stls
 def all_nba_avg_lines(inputdf, year1, year2):
     df = inputdf.copy()
@@ -336,140 +326,24 @@ def win_shares_all(inputdf, year1, year2, player):
              outlier_x=outx, outlier_y=outy,length = [15]*3,y1 = [player_ws_span.OWS, player_ws_span.WS, player_ws_span.DWS] ,x1 = [0.85,1.85,2.85],ray_color = ["#f16913"]*3, ray_angles= ['deg']*3,top=[0.7, 0.7, 0.7], width = [0.2, 0.2, 0.2], height = [0.01, 0.01, 0.01])))
     return win_shares_source_all
 def true_shooting(player_name, inputdf, year1, year2):
-    df = inputdf.copy()
-    df = df[(df['Year'] >= year1) & (df['Year'] <= year2)]
-    each_player = pd.DataFrame(df.groupby(['Player']).agg({'FGA': 'sum', 'PTS':'sum',"FTA":'sum'}))
-    each_player = each_player[(each_player['FGA'] > 20) & (each_player['FTA'] > 20)]
     def formula(pts, fga, fta):
         try:
             return 100*pts/(2*(fga + (0.44*fta)))
         except:
             return 0.1
+
+    df = inputdf.copy()
+    df = df[(df['Year'] >= year1) & (df['Year'] <= year2)]
+    each_player = pd.DataFrame(df.groupby(['Player']).agg({'FGA': 'sum', 'PTS':'sum',"FTA":'sum'}))
+    each_player = each_player[(each_player['FGA'] > 20) & (each_player['FTA'] > 20)]
+
     ts = [formula(x.PTS, x.FGA, x.FTA) for x in each_player.itertuples()]
     return formula(each_player.at[player_name, 'PTS'],each_player.at[player_name, 'FGA'],each_player.at[player_name, 'FTA']), each_player, ts
 
 lat = 40.391975
 lon = -97.685789
 OrRd = OrRd[9][:6]
-JS_CODE = """
-# This file contains the JavaScript (CoffeeScript) implementation
-# for a Bokeh custom extension. The "surface3d.py" contains the
-# python counterpart.
-#
-# This custom model wraps one part of the third-party vis.js library:
-#
-#     http://visjs.org/index.html
-#
-# Making it easy to hook up python data analytics tools (NumPy, SciPy,
-# Pandas, etc.) to web presentations using the Bokeh server.
-
-# These "require" lines are similar to python "import" statements
-import * as p from "core/properties"
-import {LayoutDOM, LayoutDOMView} from "models/layouts/layout_dom"
-
-# This defines some default options for the Graph3d feature of vis.js
-# See: http://visjs.org/graph3d_examples.html for more details.
-OPTIONS =
-  width:  '700px'
-  height: '700px'
-  style: 'dot-color'
-  showPerspective: true
-  showGrid: true
-  keepAspectRatio: true
-  verticalRatio: 1.0
-  showLegend: false
-  cameraPosition:
-    horizontal: -0.35
-    vertical: 0.22
-    distance: 1.8
-  dotSizeRatio: 0.01
-  tooltip: (point) -> return 'value: <b>' + point.z + '</b><br>' + 'extra: <b>' + point.data.extra
-
-
-
-
-# To create custom model extensions that will render on to the HTML canvas
-# or into the DOM, we must create a View subclass for the model. Currently
-# Bokeh models and views are based on BackBone. More information about
-# using Backbone can be found here:
-#
-#     http://backbonejs.org/
-#
-# In this case we will subclass from the existing BokehJS ``LayoutDOMView``,
-# corresponding to our
-export class Surface3dView extends LayoutDOMView
-
-  initialize: (options) ->
-    super(options)
-
-    url = "http://visjs.org/dist/vis.js"
-
-    script = document.createElement('script')
-    script.src = url
-    script.async = false
-    script.onreadystatechange = script.onload = () => @_init()
-    document.querySelector("head").appendChild(script)
-
-  _init: () ->
-    # Create a new Graph3s using the vis.js API. This assumes the vis.js has
-    # already been loaded (e.g. in a custom app template). In the future Bokeh
-    # models will be able to specify and load external scripts automatically.
-    #
-    # Backbone Views create <div> elements by default, accessible as @el. Many
-    # Bokeh views ignore this default <div>, and instead do things like draw
-    # to the HTML canvas. In this case though, we use the <div> to attach a
-    # Graph3d to the DOM.
-    @_graph = new vis.Graph3d(@el, @get_data(), OPTIONS)
-
-    # Set Backbone listener so that when the Bokeh data source has a change
-    # event, we can process the new data
-    @connect(@model.data_source.change, () =>
-        @_graph.setData(@get_data())
-    )
-
-  # This is the callback executed when the Bokeh data has an change. Its basic
-  # function is to adapt the Bokeh data source to the vis.js DataSet format.
-  get_data: () ->
-    data = new vis.DataSet()
-    source = @model.data_source
-    for i in [0...source.get_length()]
-      data.add({
-        x:     source.get_column(@model.x)[i]
-        y:     source.get_column(@model.y)[i]
-        z:     source.get_column(@model.z)[i]
-        extra: source.get_column(@model.extra)[i]
-        style: source.get_column(@model.color)[i]
-      })
-    return data
-
-# We must also create a corresponding JavaScript Backbone model sublcass to
-# correspond to the python Bokeh model subclass. In this case, since we want
-# an element that can position itself in the DOM according to a Bokeh layout,
-# we subclass from ``LayoutDOM``
-export class Surface3d extends LayoutDOM
-
-  # This is usually boilerplate. In some cases there may not be a view.
-  default_view: Surface3dView
-
-  # The ``type`` class attribute should generally match exactly the name
-  # of the corresponding Python class.
-  type: "Surface3d"
-
-  # The @define block adds corresponding "properties" to the JS model. These
-  # should basically line up 1-1 with the Python model class. Most property
-  # types have counterparts, e.g. ``bokeh.core.properties.String`` will be
-  # ``p.String`` in the JS implementatin. Where the JS type system is not yet
-  # as rich, you can use ``p.Any`` as a "wildcard" property type.
-  @define {
-    x:           [ p.String           ]
-    y:           [ p.String           ]
-    z:           [ p.String           ]
-    color:       [ p.String           ]
-    extra:       [ p.String           ]
-    data_source: [ p.Instance         ]
-  }
-"""
-
+first_player = 'Kevin Durant'
 path = 'C:/Users/Julien/PycharmProjects/nba/static/'
 
 data = pd.read_csv(path + 'Seasons_Stats.csv')
@@ -483,8 +357,6 @@ teamsDict = {t: set([y[2] for y in data.itertuples() if y[5]==t]) for t in teams
 teamNames = pd.read_csv(path + 'teams.csv', index_col='Abbrev')
 
 newteamsDict = {teamNames.at[t, 'Name'] :teamsDict[t] for t in teamsDict}
-
-first_player = 'Kevin Durant'
 
 teamabbrevdict = {teamNames.index[x]:str(teamNames.values[x][0].strip()) for x in range(len(teamNames))}
 teamlist = [list(y) for x in player_stats(data, first_player)['Tm'].unique() for y in teamNames.itertuples() if x == y[0] and x != 'TOT']
@@ -507,19 +379,6 @@ orbavg = selected_player_df['orbavg']
 drbavg = selected_player_df['drbavg']
 stlavg = selected_player_df['STL'].sum()/selected_player_df['G'].sum()
 blkavg = selected_player_df['BLK'].sum()/selected_player_df['G'].sum()
-
-# player_fta = a['FTA'].sum()
-# player_ft = a['FT'].sum()
-# player_career_ftavg = player_ft/player_fta
-#
-# player_3pa = a['3PA'].sum()
-# player_3p = a['3P'].sum()
-# player_career_3pavg = player_3p/player_3pa
-#
-# player_2pa = a['2PA'].sum()
-# player_2p = a['2P'].sum()
-# player_career_2pavg = player_2p/player_2pa
-
 
 #BOKEH
 
@@ -561,7 +420,6 @@ blkavg = selected_player_df['BLK'].sum()/selected_player_df['G'].sum()
 # extra = np.asarray(['a' for x in range(50)]+['b' for x in range(50)])
 # source200 = ColumnDataSource(data=dict(x=X_data, y=Y_data, z=Z_data, color = color, extra=extra))
 # surface = Surface3d(x="x", y="y", z="z", extra="extra", color="color", data_source=source200)
-
 selectplayer = Select(title='Player:', value='Kevin Durant', options=sorted(list(data['Player'].unique())))
 selectplayer.on_change('value', updateplayer)
 
@@ -569,12 +427,6 @@ selectteam = Select(title='Use This To Filter *Player* By Team:', value='All', o
 selectteam.on_change('value', updateteam)
 
 download_source = ColumnDataSource(player_stats(data, str(selectplayer.value)))
-
-button = Button(label="Download Data", button_type="primary")
-button.callback = CustomJS(args=dict(source=download_source),code=open(join(dirname(__file__), "download.js")).read())
-
-free_throws_button = Button(label="Free Throws page", button_type="warning")
-free_throws_button.callback = CustomJS(args=dict(source=download_source),code=open(join(dirname(__file__), "download.js")).read())
 
 hoverline = HoverTool(tooltips=[
     ("Year", "@x{0}"),
@@ -644,11 +496,13 @@ heatmap.x_range.start=-5
 heatmap.grid.visible = False
 heatmap.outline_line_color = None
 
-# map_options = GMapOptions(lat=lat, lng=lon, map_type="roadmap", zoom=3)
-# g = gmap(key, map_options, title="Career Stops", width = 350, height = 350)
-map_figure = figure(plot_width=475, plot_height=350,
-           tools=[hovermap],
-           title="Map", x_axis_location=None, y_axis_location=None,toolbar_location="right")
+key = 'AIzaSyDDAzir5vZuZ0Z-dkCLOp3rIq5l74KLJWo'
+
+map_options = GMapOptions(lat=lat, lng=lon, map_type="roadmap", zoom=3)
+map_figure = gmap(key, map_options, title="Career Stops", width = 475, height = 350)
+# map_figure = figure(plot_width=475, plot_height=350,
+#            tools=[hovermap],
+#            title="Map", x_axis_location=None, y_axis_location=None,toolbar_location="right")
 map_figure_source = ColumnDataSource(data=dict(lat=[x[3] for x in teamlist],lon=[x[4] for x in teamlist], city = [x[2] for x in teamlist]))
 map_figure.circle(x="lon", y="lat", size=12, fill_color="#c157f2", fill_alpha=0.8, source=map_figure_source)
 map_figure.axis.visible = False
@@ -675,7 +529,7 @@ win_share_lines = win_shares.segment(x0='x0', y0='y0',y1='y1', x1='x1', color="r
 
 current_player_ts, ts_players, ts_percent = true_shooting(first_player, data, player_first_year, player_last_year)
 ts_max = max(ts_percent)*0.01
-true_shooting_source = ColumnDataSource(data = dict(x = [0.25],y = [0],cur_player=[current_player_ts],  players=ts_players , ts=[np.linspace(0,ts_max,100).reshape(100,1)], dw = [0.5], dh = [ts_max-0]))
+true_shooting_source = ColumnDataSource(data = dict(x = [0.25],y = [0],cur_player=[current_player_ts],  ts=[np.linspace(0,ts_max,100).reshape(100,1)], dw = [0.5], dh = [ts_max-0]))
 ts = figure(plot_width=150, plot_height=350,x_range=[0, 1],x_axis_location=None, y_range=[0, ts_max],min_border_right=10, title = 'Career TS%', tools = [])
 ts.image(image='ts',x='x',y='y',dw='dw',dh='dh', palette=viridis(100)[:50], source = true_shooting_source)
 ts_span = Span(location=current_player_ts*0.01, dimension='width', line_color='#f16913', line_dash='solid', line_width=5, line_alpha=0.7, name = 'ts_span')
@@ -702,11 +556,11 @@ sourceper = ColumnDataSource(data = dict(x=player_years, a = player_per, avg = p
 sourcerpg= ColumnDataSource(data = dict(x=player_years, o = off_reb, d = def_reb, t = tot_reb, avgt=rebavg, avgo = orbavg, avgd = drbavg, nbaavg = all_nba_rebs, label_avg = [rebavg[0], all_nba_rebs[0]]+[0 for x in range(len(player_years)-2)], names = ['Player Avg', 'NBA Avg']+ ['' for x in range(len(player_years)-2)], label_spots = [player_years[0],player_years[0]]+ [player_years[0] for x in range(len(player_years)-2)]))
 sourceapg = ColumnDataSource(data = dict(x=player_years, a = player_asts, avg = astavg, nbaavg = all_nba_asts, label_avg = [astavg[0], all_nba_asts[0]]+[0 for x in range(len(player_years)-2)], names = ['Player Avg', 'NBA Avg']+ ['' for x in range(len(player_years)-2)], label_spots = [player_years[0],player_years[0]]+ [player_years[0] for x in range(len(player_years)-2)]))
 
-p.line('x', 'y', source=sourceppg, line_width=2.5, line_color='#E24A33',alpha = 0.4)
-p.circle('x', 'y', source=sourceppg, size=8, line_color='#E24A33', fill_color = '#568ce2')
-z.line('x', 'a', source=sourceapg, line_width=2.5, line_color='#a30693',alpha = 0.4)
-z.circle('x', 'a', source=sourceapg, size=8, line_color='#a30693', fill_color = '#568ce2')
-w.vbar_stack(stackers=['d','o'], x='x', width=0.5, color=['blue', '#568ce2'], source=sourcerpg,legend=['DREB', 'OREB'])
+p.line('x', 'y', source=sourceppg, line_width=3.5, line_color='#E24A33',alpha = 0.4)
+p.circle('x', 'y', source=sourceppg, size=12, line_color='#E24A33', fill_color = '#568ce2')
+z.line('x', 'a', source=sourceapg, line_width=3.5, line_color='#a30693',alpha = 0.4)
+z.circle('x', 'a', source=sourceapg, size=12, line_color='#a30693', fill_color = '#568ce2')
+w.vbar_stack(stackers=['d','o'], x='x', width=0.5, color=['blue', '#568ce2'], source=sourcerpg,legend_label=['DREB', 'OREB'])
 i.vbar(x = 'x', top = 'a', width = 0.5, color={'field': 'a', 'transform': color_mapper}, source = sourceper)
 
 # Selected Players' Average lines
@@ -757,16 +611,10 @@ labels_per.visible = False
 i.add_layout(labels_per)
 
 # checkbox_group
-button_group = CheckboxButtonGroup(labels=["Average PPG Lines", "Average RPG Lines", "Average APG Lines", "Average PER Lines"], active=[])
+button_group = CheckboxButtonGroup(labels=["Average PPG Lines", "Average RPG Lines", "Average APG Lines", "Average PER Lines"], active=[], )
 button_group.on_click(update_avg_line)
 
-imagesource = ColumnDataSource(data = dict(url = ['nba\\static\\images\\lebron_james.png'], x = [0], y = [0], w = [50], h = [50], anchor = ['bottom_left']))
-
 img = figure(plot_width=300, plot_height=200, x_range=(0, 370), y_range=(0, 834), x_axis_type=None,y_axis_type=None,tools = [])
-# imagee= ImageURL(url='url',x='x', y='y', w='w', h='h',anchor='bottom_left')
-# img.add_glyph(imagesource, imagee)
-# # img.grid.visible = False
-# # img.outline_line_color = None
 imageglyph = img.image_url(url=['nba/static/images/kevin_durant.png'],x=0, y=0, w=369, h=834,anchor="bottom_left")
 img.grid.visible = False
 img.outline_line_color = None
@@ -782,18 +630,30 @@ w.legend.orientation = 'horizontal'
 w.legend.location = "top_left"
 w.y_range.end = tot_reb.max()*1.4
 w.yaxis.major_label_text_font_style = "bold"
-p.ygrid.grid_line_alpha = 0.8
-p.ygrid.grid_line_dash = [6, 4]
-w.ygrid.grid_line_alpha = 0.8
-w.ygrid.grid_line_dash = [6, 4]
-z.ygrid.grid_line_alpha = 0.8
-z.ygrid.grid_line_dash = [6, 4]
-i.xgrid.grid_line_alpha = 0.8
-i.xgrid.grid_line_dash = [6, 4]
+
 win_shares.xgrid.visible = False
 
+for plot in [p, w, z, i]:
+    plot.ygrid.grid_line_alpha = 0.8
+    plot.ygrid.grid_line_dash = [6, 4]
+    plot.xaxis.axis_label_text_font_style = "bold"
+
+for plot in [p, w, z, i, defense_scatter, map_figure, win_shares]:
+    plot.outline_line_width = 4
+    plot.outline_line_alpha = 0.3
+    plot.outline_line_color = "navy"
+
+for plot in [heatmap, p, w, z, i, defense_scatter, map_figure, win_shares, ts, img]:
+    plot.toolbar.autohide = True
+    plot.yaxis.axis_label_text_font_style = "bold"
+    plot.xaxis.axis_label_text_font_style = "bold"
+    plot.yaxis.major_label_text_font_style = 'bold'
+    plot.xaxis.major_label_text_font_style = 'bold'
+    plot.xaxis.major_label_text_font_size = "13pt"
+    plot.yaxis.major_label_text_font_size = "13pt"
+
 div = Div(width = 300, height = 400, text = makediv(selected_player_df, [x[1] for x in teamlist]))
-widgets = column(selectplayer,selectteam,free_throws_button, button,button_group, img, div, width=300)
+widgets = column(selectplayer,selectteam,button_group, img, div, width=300)
 year_charts = column([p,z,w, i])
 square_charts = column([row(defense_scatter,heatmap),row(ts,map_figure), win_shares])
 display = row([widgets, year_charts, square_charts])
