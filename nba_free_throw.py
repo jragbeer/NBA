@@ -6,7 +6,7 @@ import datetime
 import time
 import pickle
 from pprint import pprint
-# from mpl_toolkits.basemap import Basemap
+import pyarrow
 from bokeh.models import BasicTickFormatter, HoverTool, BoxSelectTool, BoxZoomTool, ResetTool, Span, Label, Button, DatePicker, CustomJS
 from bokeh.models import NumeralTickFormatter, WheelZoomTool, PanTool, SaveTool, ColumnDataSource, LinearAxis, Range1d, FactorRange
 from bokeh.models.widgets import Select, inputs, Slider, CheckboxGroup, Toggle, Div
@@ -15,14 +15,19 @@ from sqlalchemy import create_engine
 import pymysql
 from bokeh.io import curdoc
 from pytz import timezone
+from bokeh.transform import cumsum
 from bokeh.plotting import figure, show
+import sqlite3
+import pymongo
+import os
+import colorcet as cc
+
+palette = cc.fire[16:253]
 
 doc = curdoc()
 doc.clear()
-doc.title = 'Simple Stats'
-
+doc.title = 'NBA FREE THROW'
 sns.set()
-
 
 def clean_player2(df):
     df['player'] = pd.Series([x.replace('.', '').replace("'", '') for x in df.player], index=df.index)
@@ -160,181 +165,447 @@ def salary_stuff(data):
     print(new.sort_values(by = 'salary', ascending=False).head(20).to_string())
 
     print(new.sort_values(by = 'salary').head(20).to_string())
+def NestedDictValues(d):
+  for v in d.values():
+    if isinstance(v, dict):
+      yield from NestedDictValues(v)
+    else:
+      yield v
+def get_team_names():
+    try:
+        teamNames = pd.read_parquet(data_path + 'nba_player_analysis_teams.parquet')
+    except:
+        teamNames = pd.read_csv(data_path + 'nba_player_analysis_teams.csv', index_col='Abbrev')
+        teamNames['State'] = [i.split(',')[1] for i in teamNames.Location.values]
+        teamNames['City'] = [i.split(',')[0] for i in teamNames.Location.values]
+    return teamNames
 
-
-path = 'C:/Users/Julien/PycharmProjects/nba/'
+path = os.getcwd().replace("\\", '/') + '/'
+data_path = path + 'data/'
 timee = datetime.datetime.now()
 print(timee)
 
-teamNames = pd.read_csv(path + 'static/teams.csv', index_col='Abbrev')
-teamNames['State'] = [i.split(',')[1] for i in teamNames.Location.values]
-teamNames['City'] = [i.split(',')[0] for i in teamNames.Location.values]
+teamNames = get_team_names()
 
-# dictionary with all games for each team between 2016-2017 and 2020 seasons or 2008-2009 to 2015-2016 seasons.
-pickle_in = open(path + "all_games_all_years_2009_2016.pickle", "rb")
-data = pickle.load(pickle_in)
-print(data.keys(), data[list(data.keys())[0]])
+# dictionary with all games for each team between 2016-2017 and 2020 seasons or 2008-2009 to 2015-2016 seasons. Structure:
+# year{
+#       team{
+#           playoffs / regular season{
+#                       url }
+pickle_in = open(data_path + "all_games_all_years_2009_2016.pickle", "rb")
+data_2016 = pickle.load(pickle_in)
+pickle_in = open(data_path + "all_games_all_years_2017_2020.pickle", "rb")
+data_2020 = pickle.load(pickle_in)
+# print(data_2016.keys(), data_2016[list(data_2016.keys())[0]])
 # SQLITE3 DATABASE (matchup)
-engine = sqlite3.connect(path + 'nba_matchup_data.db')
+engine = sqlite3.connect(data_path + 'nba_matchup_data.db')
 # SQLITE3 DATABASE (play by play)
-engine_playbyplay = sqlite3.connect(path + 'nba_playbyplay_data.db')
+engine_playbyplay = sqlite3.connect(data_path + 'nba_playbyplay_data.db')
 # SQLITE3 DATABASE (boxscore)
-engine_boxscore = sqlite3.connect(path + 'nba_boxscore_data.db')
+engine_boxscore = sqlite3.connect(data_path + 'nba_boxscore_data.db')
+# SQLITE3 DATABASE (freethrow)
+engine_freethrow = sqlite3.connect(data_path + 'nba_freethrow_data.db')
 # MONGODB DATABASE
 mongo_client = pymongo.MongoClient('localhost', 27017)
 db = mongo_client['NBA']
 collection = db['basic_game_info']
+data_2016.update(data_2020)
+# all game_id's in a list
+all_games = [item.split('gameId=')[1] for sublist in NestedDictValues(data_2016) for item in sublist]
 
+def get_gameid_player_mapping():
+    """
+
+    :return: dataframe of gameid, away and home team rosters
+    """
+    game_ids = pd.read_sql("""SELECT name FROM sqlite_master WHERE type ='table' AND name NOT LIKE 'sqlite_%' """,
+                           engine_boxscore)['name'].to_list()
+    game_ids = set(int(x.replace('gameid_', '')) for x in game_ids)
+    # create a list of dictionaries with data, to be made into a dataframe.
+    all_mappings = []
+    for each in game_ids:
+        idf = pd.read_sql(f"select * from gameid_{each}", engine_boxscore, )
+        data = {"game_id": each}
+        teamz = [z for z in idf['team']]
+        data["away_team_roster"] = idf[idf['team'] == teamz[0]]['player'].to_list()
+        data["home_team_roster"] = idf[idf['team'] == teamz[-1]]['player'].to_list()
+        all_mappings.append(data)
+    return pd.DataFrame(all_mappings)
+def improving_ft(data):
+    # find how many shots each player made in each season
+    idf = data.groupby(['player', 'season'])['shot_made'].agg(['sum','count']).rename(columns={'sum':'shot_made'})
+    idf['percent'] = 100 * idf['shot_made'] / idf['count']
+    idf = idf[idf['count'] > 100] # only look for players/seasons with over 100 attempts
+
+    coc = idf.reset_index(drop=False,)
+    coc = coc.groupby('player').agg({'season':list})
+    cool = pd.DataFrame(coc['season'].tolist(), index = coc.index, columns = [f'Season_{x+1}' for x in range(4)])
+    # nice is dictionary with 4 lists. Each element in each list is a different player, but the same element across lists are the same player
+
+    nice = {str(x+1) : [] for x in range(4)}
+    for x in cool.itertuples():
+        col_nums = {'1': x.Season_1, '2': x.Season_2, '3':x.Season_3,'4':x.Season_4,}
+        for i in range(4):
+            try:
+                nice[str(i+1)].append(idf.at[(x.Index, col_nums[str(i+1)]), 'percent'])
+            except:
+                nice[str(i+1)].append(np.nan)
+    num = 0
+    no_num = 0
+    for x in nice.keys():
+        try:
+            for i in range(len(nice[x])):
+                if nice[str(int(x)+2)][int(i)] > nice[str(int(x)+1)][int(i)]:
+                    num += 1
+                elif nice[str(int(x)+2)][int(i)] < nice[str(int(x)+1)][int(i)]:
+                    no_num +=1
+        except Exception as e:
+            pass
+    # print overview stats
+    print('Times a player shoots better season over season: ',num)
+    print('Times a player shoots worse season over season: ',no_num)
+    print(f'Percentage of time a Player shoots better: {100*num/(no_num+ num):.1f}%',)
+    print(f'Percentage of time a Player shoots worse: {100*no_num/(no_num+ num):.1f}%',)
+
+    plot_data = pd.DataFrame.from_dict(nice)
+    plot_data.index = cool.index
+
+    p = figure(plot_width=1100, plot_height=750, title=f"Do Players Improve?",
+               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(),
+                      WheelZoomTool(), SaveTool(), PanTool()],
+               y_axis_label='Percentage (%)', x_axis_label='Season', )
+
+    for x in plot_data.itertuples():
+        p.line(plot_data.columns, np.array(list(x)[1:]),alpha = 0.22, color = 'red')
+    for plot in [p, ]:
+        plot.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
+        plot.yaxis.ticker.desired_num_ticks = 15
+        plot.outline_line_width = 3
+        plot.outline_line_alpha = 0.3
+        plot.axis.minor_tick_line_alpha = 0
+        plot.axis.major_tick_line_color = 'black'
+        plot.axis.major_tick_in = -1
+        plot.yaxis.major_label_text_font_style = 'bold'
+        plot.xaxis.major_label_text_font_style = 'bold'
+        plot.yaxis.major_label_text_font = "Arial"
+        plot.xaxis.major_label_text_font = "Arial"
+        plot.title.align = 'center'
+        plot.title.text_font_size = '12pt'
+        plot.xaxis.axis_line_width = 0
+        plot.yaxis.axis_line_width = 0
+        plot.yaxis.axis_label_text_font_style = "bold"
+        plot.xaxis.axis_label_text_font_style = "bold"
+        plot.toolbar.active_scroll = "auto"
+        plot.toolbar.autohide = True
+        plot.xgrid.visible = False
+        plot.yaxis.axis_label_text_font_size = "15pt"
+        plot.xaxis.axis_label_text_font_size = "15pt"
+        plot.xaxis.major_label_text_font_size = "15pt"
+        plot.yaxis.major_label_text_font_size = "13pt"
+        # plot.legend.location = "top_left"
+        # plot.legend.click_policy = "hide"
+    # widgets = column([select_metric])
+    dashboard = row([p])
+    doc.add_root(dashboard)
+    show(dashboard)
 def consolidate_to_single_df():
-    pickle_in = open("game_id_player_mapping.pickle","rb")
-    game_id_dict = pickle.load(pickle_in)
-    game_id_players = pd.DataFrame(data= dict(game_id = list(game_id_dict.keys()), away_team_roster = [game_id_dict[i]['1'] for i in game_id_dict.keys()], home_team_roster = [game_id_dict[i]['2'] for i in game_id_dict.keys()]))
-    game_id_players['game_id'] = game_id_players['game_id'].astype(int)
+    # game_id_players = get_gameid_player_mapping()
+    pickle_in = open("game_id_players.pickle", "rb")
+    game_id_players = pickle.load(pickle_in)
+    print(datetime.datetime.now()-timee)
+    # idf = pd.concat([pd.read_csv(path + 'free_throws.csv'), pd.read_sql('select * from freethrow', engine_freethrow)])
+    idf = pd.read_sql('select * from freethrow', engine_freethrow)
+    idf.rename(columns = {'score':'score_after'}, inplace =True)
+    idf['game_id'] = idf['game_id'].astype(int)
+    idf = idf[idf['game'] != 'WEST - EAST']
+    idf = idf[idf['game'] != 'EAST - WEST']
+    idf = pd.merge(idf, game_id_players, how = 'left', on = 'game_id')
 
-    game_id_players =
-
-    df = pd.read_csv(path + 'free_throws.csv')
-    df.rename(columns = {'score':'score_after'}, inplace =True)
-    df['game_id'] = df['game_id'].astype(int)
-    df = df[df['game'] != 'WEST - EAST']
-    df = df[df['game'] != 'EAST - WEST']
-    df = pd.merge(df, game_id_players, how = 'left', on = 'game_id')
-
-    df = clean_player_df(df)
-    idf['Home Team'] = pd.Series([x.split('-')[1].strip() for x in df['game']], index = df.index)
+    idf['Home Team'] = pd.Series([x.split('-')[1].strip() for x in idf['game']], index=idf.index)
     for k, v in {"GS": "GSW", 'NJ': 'NJN', 'NO': 'NOP', 'NY': 'NYK', 'UTAH': 'UTA',}.items():
         idf.replace(k, v, inplace = True)
-
 
     salaries = pd.read_csv(path + 'salary data/playersalaries.csv')
     salaries['Player'] = salaries['Player'].str.lower()
     salaries['Player'] = pd.Series([x.replace('.', '').replace("'", '') for x in salaries.Player], index=salaries.index)
 
-
-    data = pd.merge(idf, teamNames, how = 'left', right_index = True, left_on = 'Home Team')
+    data = pd.merge(idf, teamNames, how = 'left', right_index=True, left_on = 'Home Team')
     data['Location'] = data['Location'].astype(str)
     data['State'] = [i.split(',')[1] for i in data.Location.values]
     data['City'] = [i.split(',')[0] for i in data.Location.values]
 
-
     player_team = []
     for x in data.itertuples():
         pp = x.player
-        if pp in x.home_team_roster:
+        try:
+            ww = pp.split()[0][0] + '. ' + pp.split()[1]
+        except IndexError:
+            ww = 'Nene'
+        if ww in x.home_team_roster:
             player_team.append('home')
-        elif pp in x.away_team_roster:
+        elif ww in x.away_team_roster:
             player_team.append('away')
         else:
             player_team.append('0')
+            # print(ww, x.away_team_roster, x.home_team_roster)
     data['Players_team'] = pd.Series(player_team, index = data.index)
     data = data[data['Players_team'] != '0']
+    return data
+    # pickle_out = open("data.pickle","wb")
+    # pickle.dump(data, pickle_out)
+    # pickle_out.close()
+def position_matters(data):
+    def get_season_stats():
+        try:
+            season_stats = pd.read_parquet(data_path + 'season_stats_cleaned.parquet')
+        except:
+            season_stats = pd.read_csv("Seasons_Stats.csv")
+            season_stats['Pos'].replace('C-F', "C-PF", inplace = True)
+            season_stats['Pos'].replace('C-SF', "PF", inplace=True)
+            season_stats['Pos'].replace('F', "SF", inplace=True)
+            season_stats['Pos'].replace('F-C', "PF", inplace=True)
+            season_stats['Pos'].replace('G', "SG", inplace=True)
+            season_stats['Pos'].replace('PF-C', "C-PF", inplace=True)
+            season_stats['Pos'].replace('F-G', "PF-SF", inplace=True)
+            season_stats['Pos'].replace('G-F', "PF-SF", inplace=True)
+            season_stats['Pos'].replace('SF-PF', "PF-SF", inplace=True)
+            season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
+            season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
+            season_stats['Pos'].replace('SG-SF', "SF-SG", inplace=True)
+            season_stats['Pos'].replace('PG-SG', "SG-PG", inplace=True)
+            season_stats['Pos'].replace('SF-PG', "SG", inplace=True)
+            season_stats['Pos'].replace('SG-PF', "SF", inplace=True)
+        return season_stats
+    def make_source(df, metric = 'percent'):
+        return ColumnDataSource(data = {'x': df.index, 'y': df[metric], 'percent': df['percent'], 'made': df['shot_made'], 'attempts': df['count']})
+    def update_metric(attr, old, new):
+        if new == 'Percentage':
+            src.data = dict(make_source(groupby_position,).data)
+            p.yaxis.axis_label = 'Percentage (%)'
+        elif new == 'Attempts':
+            src.data = dict(make_source(groupby_position,'count').data)
+            p.yaxis.axis_label = 'Shots'
+        elif new == "Shots Made":
+            src.data = dict(make_source(groupby_position,'shot_made').data)
+            p.yaxis.axis_label = 'Shots'
 
-    pickle_out = open("data.pickle","wb")
-    pickle.dump(data, pickle_out)
-    pickle_out.close()
+    doc = curdoc()
+    doc.clear()
+    doc.title = 'NBA FREE THROWS'
 
-pickle_in = open("data.pickle","rb")
+    season_stats = get_season_stats()
+    # find how many times player played at each position
+    tmp = season_stats.groupby(['Player', 'Pos']).agg({'Pos':'count'}).unstack()
+    # find how max of each player's position, put that as player's position
+    positions = pd.DataFrame(tmp.idxmax(axis=1), columns=['pos'])
+    positions['position'] = [x[1] for x in positions['pos']]
+    positions.index = [x.lower().replace('*', '') for x in positions.index]
+    positions['player'] = positions.index
+    positions = clean_player2(positions)
+    positions.index = positions['player']
+    positions.drop(['pos', 'player'], 1, inplace=True)
+
+    data['player'] = data['player'].str.lower() # lower names so join works
+    full_data = pd.merge(data, positions, how = 'inner', right_index=True, left_on = 'player')
+    # find simple stats for each position
+    groupby_position = pd.DataFrame(full_data.groupby(['position'])['shot_made'].sum())
+    groupby_position['count'] = full_data.groupby(['position'])['shot_made'].count()
+    groupby_position['percent'] = 100 * groupby_position['shot_made'] / groupby_position['count']
+    groupby_position = groupby_position.sort_values("percent", ascending=False)
+    src = make_source(groupby_position)
+
+    select_metric = Select(title='Metric', value=f"Percentage", options=['Percentage', "Attempts", "Shots Made"], width=175)
+    select_metric.on_change('value', update_metric)
+
+    p = figure(plot_width=1100, plot_height=750, x_range=list(groupby_position.index),
+               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+               x_axis_label="Position", y_axis_label="Percentage (%)", toolbar_location="right", title=f"Free Throw Stats by Position")
+    p.vbar('x', top='y', source=src, width=0.6, alpha=0.75, name='bars', fill_color='orangered', line_color = 'black', line_width = 2)
+    p.add_tools(HoverTool(mode='vline', tooltips=[("Position", "@x"), ("Percentage (%)", "@percent{(0.0)}"),("Attempts", "@attempts{(0,0)}"), ("Shots Made", "@made{(0,0)}"),],))
+    for plot in [p,]:
+        plot.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
+        plot.yaxis.ticker.desired_num_ticks=15
+        plot.outline_line_width = 3
+        plot.outline_line_alpha = 0.3
+        plot.axis.minor_tick_line_alpha = 0
+        plot.axis.major_tick_line_color = 'black'
+        plot.axis.major_tick_in = -1
+        plot.yaxis.major_label_text_font_style = 'bold'
+        plot.xaxis.major_label_text_font_style = 'bold'
+        plot.yaxis.major_label_text_font = "Arial"
+        plot.xaxis.major_label_text_font = "Arial"
+        plot.title.align = 'center'
+        plot.title.text_font_size = '12pt'
+        plot.xaxis.axis_line_width = 0
+        plot.yaxis.axis_line_width = 0
+        plot.yaxis.axis_label_text_font_style = "bold"
+        plot.xaxis.axis_label_text_font_style = "bold"
+        plot.toolbar.active_scroll = "auto"
+        plot.toolbar.autohide = True
+        plot.xgrid.visible = False
+        plot.yaxis.axis_label_text_font_size = "15pt"
+        plot.xaxis.axis_label_text_font_size = "15pt"
+        plot.xaxis.major_label_text_font_size = "15pt"
+        plot.yaxis.major_label_text_font_size = "13pt"
+        # plot.legend.location = "top_left"
+        # plot.legend.click_policy = "hide"
+    widgets = column([select_metric])
+    dashboard = row([widgets, p])
+    doc.add_root(dashboard)
+    show(dashboard)
+def make_home_away_charts(data):
+    def home_away(data_, szn):
+        data_ = data_[data_['season'] == szn]
+        home_shot_made = data_[data_['Players_team'] == 'home']['shot_made'].copy()
+        away_shot_made = data_[data_['Players_team'] == 'away']['shot_made'].copy()
+        home_versus_away = {'made_home': home_shot_made.sum(),
+                            'made_away': away_shot_made.sum(),
+                            'total_home': len(home_shot_made.index),
+                            'total_away': len(away_shot_made.index),
+                            'home_made_percentage': home_shot_made.sum() / len(home_shot_made.index),
+                            'away_made_percentage': away_shot_made.sum() / len(away_shot_made.index)}
+        return home_versus_away
+
+    fool = {str(i): home_away(data, i) for i in data['season'].unique()}
+
+    away = [fool[i]['away_made_percentage'] * 100 for i in data['season'].unique()]
+    home = [fool[i]['home_made_percentage'] * 100 for i in data['season'].unique()]
+
+    home_shots = len(data[data['Players_team'] == 'home']['shot_made'].index)
+    away_shots = len(data[data['Players_team'] == 'away']['shot_made'].index)
+
+    p = figure(plot_width=1100, plot_height=750, y_range = (72, 79),
+               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+               x_axis_label="Position", y_axis_label="Percentage (%)", toolbar_location="right", title=f"HOME COURT ADVANTAGE")
+    src_away = ColumnDataSource(data = {'x': [x - 0.2 for x in range(len(data['season'].unique()))], 'y': away, 'season': list(data['season'].unique()), 'label': ['Away' for _ in data['season'].unique()]})
+    src_home = ColumnDataSource(data = {'x': [x + 0.2 for x in range(len(data['season'].unique()))], 'y': home, 'season': list(data['season'].unique()), 'label': ['Home' for _ in data['season'].unique()]})
+    p.vbar('x', top='y', source=src_home, width=0.3, alpha=0.65, legend_label='Home', fill_color='orangered', line_color = 'orangered', line_width = 2, name = 'home')
+    p.vbar('x', top='y', source=src_away, width=0.3, alpha=0.65, legend_label='Away', fill_color='blue', line_color = 'blue', line_width = 2, name = 'away')
+    home_avg = p.line([i for i in range(len(home))], [np.mean(home) for x in home], color = 'orangered', legend_label = 'Home Average',name='home_avg',  line_width = 4)
+    home_avg.visible = False
+    away_avg = p.line([i for i in range(len(away))], [np.mean(away) for x in away], color = 'blue', legend_label = 'Away Average',name='away_avg', line_width = 4)
+    away_avg.visible = False
+    p.add_tools(HoverTool(mode='vline', tooltips=[("Season", "@season"), ("Percentage (%)", "@y{(0.0)}"),],names = ['home', 'away']))
+    p.add_tools(HoverTool(mode='vline', tooltips=[("Average (%)", "@y{(0.0)}"),],names = ['home_avg', 'away_avg']))
+    p.xaxis.major_label_overrides = {i: v for i, v in enumerate(data['season'].unique())}
+
+    fdata = pd.Series({'Away': away_shots, 'Home': home_shots}).reset_index(name='attempts').rename(columns={'index': 'category'})
+    fdata['angle'] = fdata['attempts'] / fdata['attempts'].sum() * 2 * np.pi
+    fdata['color'] = ['blue', 'orangered', ]
+    fdata['percent'] = (100* fdata['attempts'] / fdata['attempts'].sum()).round(1)
+
+    w = figure(plot_height=750, title="Away Court Advantage", toolbar_location=None,)
+
+    w.wedge(x=0, y=1, radius=0.8,
+            start_angle=cumsum('angle', include_zero=True), end_angle=cumsum('angle'),
+            line_color="white", fill_color='color', legend_field='category', source=fdata, alpha = 0.75)
+    w.add_tools(HoverTool(tooltips=[("Percentage (%)", "@percent{(0.0)}"),("Attempts", "@attempts{(0,0)}")],))
+    w.outline_line_alpha = 0
+    w.yaxis.ticker = []
+    w.xaxis.ticker = []
+    w.legend.click_policy = "hide"
+    w.xaxis.axis_line_width = 0
+    w.yaxis.axis_line_width = 0
+    w.title.align = 'center'
+    w.title.text_font_size = '12pt'
+
+    for plot in [p]:
+        plot.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
+        plot.yaxis.ticker.desired_num_ticks=10
+        plot.xaxis.major_label_orientation = np.pi / 4
+        plot.xaxis.ticker.desired_num_ticks=len(data['season'].unique())
+        plot.outline_line_width = 3
+        plot.outline_line_alpha = 0.3
+        plot.axis.minor_tick_line_alpha = 0
+        plot.axis.major_tick_line_color = 'black'
+        plot.axis.major_tick_in = -1
+        plot.yaxis.major_label_text_font_style = 'bold'
+        plot.xaxis.major_label_text_font_style = 'bold'
+        plot.yaxis.major_label_text_font = "Arial"
+        plot.xaxis.major_label_text_font = "Arial"
+        plot.title.align = 'center'
+        plot.title.text_font_size = '12pt'
+        plot.xaxis.axis_line_width = 0
+        plot.yaxis.axis_line_width = 0
+        plot.yaxis.axis_label_text_font_style = "bold"
+        plot.xaxis.axis_label_text_font_style = "bold"
+        plot.toolbar.active_scroll = "auto"
+        plot.toolbar.autohide = True
+        plot.xgrid.visible = False
+        plot.yaxis.axis_label_text_font_size = "15pt"
+        plot.xaxis.axis_label_text_font_size = "15pt"
+        plot.xaxis.major_label_text_font_size = "12pt"
+        plot.yaxis.major_label_text_font_size = "13pt"
+        # plot.legend.location = "top_left"
+        plot.legend.click_policy = "hide"
+
+    dashboard = row([p, w])
+    doc.add_root(dashboard)
+    show(dashboard)
+    # fig1 = plt.figure()
+    # fig1.suptitle('AWAY COURT ADVANTAGE', fontsize=20)
+    # ax2 = fig1.add_subplot(111)
+    # ax2.pie([home_shots, away_shots], labels=['HOME - {:.1f}%'.format(100 * home_shots / (home_shots + away_shots)),
+    #                                           'AWAY - {:.1f}%'.format(100 * away_shots / (home_shots + away_shots))],
+    #         startangle=90, labeldistance=0.35, textprops={'fontsize': 18, 'color': 'white', 'weight': 'bold'})
+    # plt.show()
+
+
+def score_thing(data):
+    score_before = []
+    for x in data.itertuples():
+        if x.shot_made == 0: # if shot was missed, just look at the score
+            score_before.append(x.score_after)
+        else: # else, see which team the player was on, then subtract one from that team's score
+            score = x.score_after
+            first_num = int(score.split(' - ')[0])
+            second_num = int(score.split(' - ')[1])
+            if x.Players_team == 'away':
+                first_num -= 1
+            else:
+                second_num -= 1
+            score_before.append(f'{first_num} - {second_num}')
+
+    data['score_before'] = pd.Series(score_before, index=data.index)
+    data['Score_Difference_abs'] = pd.Series([np.abs(int(x.split('-')[0]) - int(x.split('-')[1])) for x in data["score_before"]], index=data.index)
+    data['Score_Difference'] = pd.Series(
+        [int(x.split('-')[0]) - int(x.split('-')[1]) for x in data["score_before"]], index=data.index)
+
+    score_dif = pd.DataFrame(data.groupby(['Score_Difference'])['shot_made'].sum())
+    score_dif['count'] = data.groupby(['Score_Difference'])['shot_made'].count()
+    score_dif['percent'] = 100 * score_dif['shot_made'] / score_dif['count']
+    score_dif = score_dif[score_dif.index >= -40]
+    score_dif = score_dif[score_dif.index <= 40]
+
+    p = figure(plot_width=1100, plot_height=750, y_range = (60, 85),
+               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+               x_axis_label="Difference in Score", y_axis_label="Percentage (%)", toolbar_location="right", title=f"HOME COURT ADVANTAGE")
+    src = ColumnDataSource({'x': list(score_dif.index), 'y':score_dif['percent'].tolist(), 'bottom' : [0 for _ in range(len(score_dif.index))]})
+    p.vbar('x', top='y',bottom='bottom', source=src, width = 0.6)
+
+    score_dif_abs = pd.DataFrame(data.groupby(['Score_Difference_abs'])['shot_made'].sum())
+    score_dif_abs['count'] = data.groupby(['Score_Difference_abs'])['shot_made'].count()
+    score_dif_abs['percent'] = 100 * score_dif_abs['shot_made'] / score_dif_abs['count']
+    score_dif_abs = score_dif_abs[score_dif_abs.index >= -40]
+    score_dif_abs = score_dif_abs[score_dif_abs.index <= 40]
+
+    w = figure(plot_width=1100, plot_height=750, y_range = (60, 85),
+               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+               x_axis_label="Difference in Score (abs)", y_axis_label="Percentage (%)", toolbar_location="right", title=f"HOME COURT ADVANTAGE")
+    abs_src = ColumnDataSource({'x': list(score_dif_abs.index), 'y':score_dif_abs['percent'].tolist(), 'bottom' : [0 for _ in range(len(score_dif_abs.index))]})
+    w.vbar('x', top='y',bottom='bottom', source=abs_src, width = 0.6)
+    show(row([p,w]))
+
+
+# df = consolidate_to_single_df()
+
+
+pickle_in = open(path + "data.pickle","rb")
 df = pickle.load(pickle_in)
-print(df.sample(100).to_string())
-
-
-
-# def make_home_away_charts(data):
-#     def home_away(data_, x):
-#         data_ = data_[data_['season'] == x]
-#         print('\nSEASON', x)
-#         home_versus_away = {'made_home': data_[data_['Players_team'] == 'home']['shot_made'].sum(),
-#                             'made_away': data_[data_['Players_team'] == 'away']['shot_made'].sum(),
-#                             'total_home': len(data_[data_['Players_team'] == 'home']['shot_made'].index),
-#                             'total_away': len(data_[data_['Players_team'] == 'away']['shot_made'].index),
-#                             'home_made_percentage': data_[data_['Players_team'] == 'home']['shot_made'].sum() / len(
-#                                 data_[data_['Players_team'] == 'home']['shot_made'].index),
-#                             'away_made_percentage': data_[data_['Players_team'] == 'away']['shot_made'].sum() / len(
-#                                 data_[data_['Players_team'] == 'away']['shot_made'].index)}
-#         print('home', home_versus_away['made_home'] / home_versus_away['total_home'], home_versus_away['made_home'],
-#               home_versus_away['total_home'])
-#         print('away', home_versus_away['made_away'] / home_versus_away['total_away'], home_versus_away['made_away'],
-#               home_versus_away['total_away'])
-#         print()
-#         return home_versus_away
-#
-#     fool = {}
-#     for i in data['season'].unique():
-#         fool[str(i)] = home_away(data, i)
-#
-#     away = [fool[i]['away_made_percentage'] * 100 for i in data['season'].unique()]
-#     home = [fool[i]['home_made_percentage'] * 100 for i in data['season'].unique()]
-#
-#     home_shots = len(data[data['Players_team'] == 'home']['shot_made'].index)
-#     away_shots = len(data[data['Players_team'] == 'away']['shot_made'].index)
-#
-#     fig = plt.figure()
-#     fig.suptitle('AWAY COURT ADVANTAGE', fontsize=20)
-#     ax1 = fig.add_subplot(111)
-#     ax1.bar(np.arange(len(data['season'].unique())) + 0.2, home, width=0.35, label='HOME')
-#     ax1.bar(np.arange(len(data['season'].unique())) - 0.2, away, width=0.35, label="AWAY")
-#     ax1.plot(np.linspace(-1, 10, 10),
-#              [(100 * data['shot_made'].sum()) / len(data.index)] * len(data['season'].unique()), c='firebrick')
-#     ax1.tick_params(axis='x', which='both', bottom=False)
-#     ax1.set(ylim=[70, 80], ylabel='Percentage (%)', xlabel='Season', xticks=range(10),
-#             xticklabels=list(data['season'].unique()))
-#     ax1.yaxis.label.set_size(18)
-#     ax1.xaxis.label.set_size(18)
-#     ax1.tick_params(axis='y', labelsize=17)
-#     ax1.tick_params(axis='x', labelsize=14)
-#     plt.legend()
-#
-#     fig1 = plt.figure()
-#     fig1.suptitle('AWAY COURT ADVANTAGE', fontsize=20)
-#     ax2 = fig1.add_subplot(111)
-#     ax2.pie([home_shots, away_shots], labels=['HOME - {:.1f}%'.format(100 * home_shots / (home_shots + away_shots)),
-#                                               'AWAY - {:.1f}%'.format(100 * away_shots / (home_shots + away_shots))],
-#             startangle=90, labeldistance=0.35, textprops={'fontsize': 18, 'color': 'white', 'weight': 'bold'})
 # make_home_away_charts(df)
-# def position_matters(data):
-#
-#     season_stats = pd.read_csv("Seasons_Stats.csv")
-#     season_stats['Pos'].replace('C-F', "C-PF", inplace = True)
-#     season_stats['Pos'].replace('C-SF', "PF", inplace=True)
-#     season_stats['Pos'].replace('F', "SF", inplace=True)
-#     season_stats['Pos'].replace('F-C', "PF", inplace=True)
-#     season_stats['Pos'].replace('G', "SG", inplace=True)
-#     season_stats['Pos'].replace('PF-C', "C-PF", inplace=True)
-#     season_stats['Pos'].replace('F-G', "PF-SF", inplace=True)
-#     season_stats['Pos'].replace('G-F', "PF-SF", inplace=True)
-#     season_stats['Pos'].replace('SF-PF', "PF-SF", inplace=True)
-#     season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
-#     season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
-#     season_stats['Pos'].replace('SG-SF', "SF-SG", inplace=True)
-#     season_stats['Pos'].replace('PG-SG', "SG-PG", inplace=True)
-#     season_stats['Pos'].replace('SF-PG', "SG", inplace=True)
-#     season_stats['Pos'].replace('SG-PF', "SF", inplace=True)
-#
-#     new = season_stats.groupby(['Player', 'Pos']).agg({'Pos':'count'}).unstack()
-#     positions = pd.DataFrame(new.idxmax(axis=1), columns=['pos'])
-#     positions['position'] = [x[1] for x in positions['pos']]
-#     positions.index = [x.lower().replace('*', '') for x in positions.index]
-#     positions['player'] = positions.index
-#     positions = clean_player2(positions)
-#     positions.index = positions['player']
-#     positions.drop(['pos', 'player'], 1, inplace=True)
-#
-#     ttt = pd.merge(data, positions, how = 'inner', right_index=True, left_on = 'player')
-#
-#     idf = pd.DataFrame(ttt.groupby(['position'])['shot_made'].sum())
-#     idf['count'] = ttt.groupby(['position'])['shot_made'].count()
-#     idf['percent'] = 100 * idf['shot_made'] / idf['count']
-#     # idf['year_number'] = [x+1 for x in range(len())]
-#     print(idf)
-#
-#     fig = plt.figure()
-#     ax1 = fig.add_subplot(111)
-#     ax1.bar(['PG', 'SG', 'SF', 'PF', "C"], [idf.at['PG','percent'],idf.at['SG','percent'],idf.at['SF','percent',],idf.at['PF','percent'],idf.at['C','percent']])
-#     ax1.set_ylim([60, 85])
-#     ax1.set_ylabel('Percentage (%)')
-#     ax1.set_xlabel('Position')
-#     ax1.tick_params(axis = 'both', which = 'both', labelsize=18)
 # position_matters(df)
+score_thing(df)
+print()
 # def make_map(data):
 #     # state_data = pd.DataFrame(data.groupby(['State'])['shot_made'].sum())
 #     # bb = data.groupby(['State'])['shot_made'].count()
@@ -567,62 +838,6 @@ print(df.sample(100).to_string())
 #     ax2.set(ylim= [60,85],xticks= [x for x in range(48)],xticklabels = [x for x in range(48)][::1],ylabel = 'Percentage (%)', xlabel = 'Minute of Game ')
 #     ax2.tick_params(axis='y', labelsize=16)
 # time_charts(df)
+# improving_ft(df)
 
-def improving_ft(data):
-    idf = pd.DataFrame(data.groupby(['player', 'season'])['shot_made'].sum())
-    idf['count'] = data.groupby(['player', 'season'])['shot_made'].count()
-    idf['percent'] = 100 * idf['shot_made'] / idf['count']
-    idf['years'] = [x.Index[1] for x in idf.itertuples()]
-    idf = idf[idf['count'] > 100]
-    print(idf.tail().to_string())
-    list_of_players = []
-    for x in idf.unstack().index:
-        list_of_seasons = []
-        for y in idf.itertuples():
-            if x == y.Index[0]:
-                list_of_seasons.append(y.Index[1])
-        list_of_players.append(list_of_seasons)
-    cool = pd.DataFrame(list_of_players, index = idf.unstack().index, columns = ['Season_{}'.format(x+1) for x in range(10)])
-    print(cool.tail().to_string())
-    nice = {str(x+1) : [] for x in range(10)}
-    for x in cool.itertuples():
-        col_nums = {'1': x.Season_1, '2': x.Season_2, '3':x.Season_3,'4':x.Season_4,'5':x.Season_5,'6':x.Season_6,'7':x.Season_7,'8':x.Season_8, '9':x.Season_9,'10':x.Season_10}
-        for i in range(10):
-            try:
-                nice[str(i+1)].append(idf.at[(x.Index, col_nums[str(i+1)]), 'percent'])
-            except:
-                nice[str(i+1)].append(np.nan)
-    pprint(nice)
-    num = 0
-    no_num = 0
-    for x in nice.keys():
-        try:
-            for i in range(len(nice[x])):
-                if nice[str(int(x)+2)][int(i)] > nice[str(int(x)+1)][int(i)]:
-                    num += 1
-                elif nice[str(int(x)+2)][int(i)] < nice[str(int(x)+1)][int(i)]:
-                    no_num +=1
-        except Exception as e:
-            pass
-    # print overview stats
-    print('Times a player shoots better season over season: ',num)
-    print('Times a player shoots worse season over season: ',no_num)
-    print('Ratio: ', num/no_num)
-
-
-    plot_data = pd.DataFrame.from_dict(nice)
-    plot_data.index = cool.index
-
-    p = figure(plot_width=600, plot_height=450, title=f"Do Players Improve?",
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(),
-                      WheelZoomTool(), SaveTool(), PanTool()],
-               y_axis_label='Percentage (%)', x_axis_label='Season', )
-
-    for x in plot_data.itertuples():
-        p.line(plot_data.columns, np.array(list(x)[1:]),alpha = 0.22, color = 'red')
-
-improving_ft(df)
-
-doc.add_root()
-show()
 
