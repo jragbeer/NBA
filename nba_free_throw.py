@@ -25,14 +25,6 @@ import sqlite3
 import pymongo
 import os
 
-
-palette = cc.fire[16:253]
-
-doc = curdoc()
-doc.clear()
-doc.title = 'NBA FREE THROW'
-sns.set()
-
 def clean_player2(df):
     df['player'] = pd.Series([x.replace('.', '').replace("'", '') for x in df.player], index=df.index)
     df['player'] = df['player'].str.lower()
@@ -150,25 +142,18 @@ def clean_player_df(df):
 
     df = clean_player2(df)
     return df
-def salary_stuff(data):
+def get_salary_scatter_data(data):
     salaries = pd.read_csv(path + 'salary data/playersalaries.csv')
     salaries['Player'] = salaries['Player'].str.lower()
     salaries['Player'] = pd.Series([x.replace('.', '').replace("'", '') for x in salaries.Player], index=salaries.index)
-
     new = pd.DataFrame(data.groupby(['player']).agg({'shot_made':'sum'}))
     new['attempts'] = data.groupby(['player']).agg({'shot_made': 'count'})
-    new['percent'] = new['shot_made']/new['attempts']
+    new['percent'] = 100*new['shot_made']/new['attempts']
     new['salary'] = salaries.groupby(['Player'])['AdjustedSalary'].mean()
     new['salary'].fillna(80000, inplace=True)
     new['salary'] = new['salary'].astype('int64')
-    new = new[new['attempts']>24]
-    print(new.sort_values(by = 'percent').head(20).to_string())
-
-    print(new.sort_values(by = 'percent', ascending=False).head(20).to_string())
-
-    print(new.sort_values(by = 'salary', ascending=False).head(20).to_string())
-
-    print(new.sort_values(by = 'salary').head(20).to_string())
+    new = new[new['attempts']>30]
+    return new
 def NestedDictValues(d):
   for v in d.values():
     if isinstance(v, dict):
@@ -183,40 +168,6 @@ def get_team_names():
         teamNames['State'] = [i.split(',')[1] for i in teamNames.Location.values]
         teamNames['City'] = [i.split(',')[0] for i in teamNames.Location.values]
     return teamNames
-
-path = os.getcwd().replace("\\", '/') + '/'
-data_path = path + 'data/'
-timee = datetime.datetime.now()
-print(timee)
-
-teamNames = get_team_names()
-
-# dictionary with all games for each team between 2016-2017 and 2020 seasons or 2008-2009 to 2015-2016 seasons. Structure:
-# year{
-#       team{
-#           playoffs / regular season{
-#                       url }
-pickle_in = open(data_path + "all_games_all_years_2009_2016.pickle", "rb")
-data_2016 = pickle.load(pickle_in)
-pickle_in = open(data_path + "all_games_all_years_2017_2020.pickle", "rb")
-data_2020 = pickle.load(pickle_in)
-# print(data_2016.keys(), data_2016[list(data_2016.keys())[0]])
-# SQLITE3 DATABASE (matchup)
-engine = sqlite3.connect(data_path + 'nba_matchup_data.db')
-# SQLITE3 DATABASE (play by play)
-engine_playbyplay = sqlite3.connect(data_path + 'nba_playbyplay_data.db')
-# SQLITE3 DATABASE (boxscore)
-engine_boxscore = sqlite3.connect(data_path + 'nba_boxscore_data.db')
-# SQLITE3 DATABASE (freethrow)
-engine_freethrow = sqlite3.connect(data_path + 'nba_freethrow_data.db')
-# MONGODB DATABASE
-mongo_client = pymongo.MongoClient('localhost', 27017)
-db = mongo_client['NBA']
-collection = db['basic_game_info']
-data_2016.update(data_2020)
-# all game_id's in a list
-all_games = [item.split('gameId=')[1] for sublist in NestedDictValues(data_2016) for item in sublist]
-print(1, datetime.datetime.now()-timee)
 def get_gameid_player_mapping():
     """
 
@@ -235,83 +186,6 @@ def get_gameid_player_mapping():
         data["home_team_roster"] = idf[idf['team'] == teamz[-1]]['player'].to_list()
         all_mappings.append(data)
     return pd.DataFrame(all_mappings)
-def improving_ft(data):
-    # find how many shots each player made in each season
-    idf = data.groupby(['player', 'season'])['shot_made'].agg(['sum','count']).rename(columns={'sum':'shot_made'})
-    idf['percent'] = 100 * idf['shot_made'] / idf['count']
-    idf = idf[idf['count'] > 100] # only look for players/seasons with over 100 attempts
-
-    coc = idf.reset_index(drop=False,)
-    coc = coc.groupby('player').agg({'season':list})
-    cool = pd.DataFrame(coc['season'].tolist(), index = coc.index, columns = [f'Season_{x+1}' for x in range(4)])
-    # nice is dictionary with 4 lists. Each element in each list is a different player, but the same element across lists are the same player
-
-    nice = {str(x+1) : [] for x in range(4)}
-    for x in cool.itertuples():
-        col_nums = {'1': x.Season_1, '2': x.Season_2, '3':x.Season_3,'4':x.Season_4,}
-        for i in range(4):
-            try:
-                nice[str(i+1)].append(idf.at[(x.Index, col_nums[str(i+1)]), 'percent'])
-            except:
-                nice[str(i+1)].append(np.nan)
-    num = 0
-    no_num = 0
-    for x in nice.keys():
-        try:
-            for i in range(len(nice[x])):
-                if nice[str(int(x)+2)][int(i)] > nice[str(int(x)+1)][int(i)]:
-                    num += 1
-                elif nice[str(int(x)+2)][int(i)] < nice[str(int(x)+1)][int(i)]:
-                    no_num +=1
-        except Exception as e:
-            pass
-    # print overview stats
-    print('Times a player shoots better season over season: ',num)
-    print('Times a player shoots worse season over season: ',no_num)
-    print(f'Percentage of time a Player shoots better: {100*num/(no_num+ num):.1f}%',)
-    print(f'Percentage of time a Player shoots worse: {100*no_num/(no_num+ num):.1f}%',)
-
-    plot_data = pd.DataFrame.from_dict(nice)
-    plot_data.index = cool.index
-
-    p = figure(plot_width=1100, plot_height=750, title=f"Do Players Improve?",
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(),
-                      WheelZoomTool(), SaveTool(), PanTool()],
-               y_axis_label='Percentage (%)', x_axis_label='Season', )
-
-    for x in plot_data.itertuples():
-        p.line(plot_data.columns, np.array(list(x)[1:]),alpha = 0.22, color = 'red')
-    for plot in [p, ]:
-        plot.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
-        plot.yaxis.ticker.desired_num_ticks = 15
-        plot.outline_line_width = 3
-        plot.outline_line_alpha = 0.3
-        plot.axis.minor_tick_line_alpha = 0
-        plot.axis.major_tick_line_color = 'black'
-        plot.axis.major_tick_in = -1
-        plot.yaxis.major_label_text_font_style = 'bold'
-        plot.xaxis.major_label_text_font_style = 'bold'
-        plot.yaxis.major_label_text_font = "Arial"
-        plot.xaxis.major_label_text_font = "Arial"
-        plot.title.align = 'center'
-        plot.title.text_font_size = '12pt'
-        plot.xaxis.axis_line_width = 0
-        plot.yaxis.axis_line_width = 0
-        plot.yaxis.axis_label_text_font_style = "bold"
-        plot.xaxis.axis_label_text_font_style = "bold"
-        plot.toolbar.active_scroll = "auto"
-        plot.toolbar.autohide = True
-        plot.xgrid.visible = False
-        plot.yaxis.axis_label_text_font_size = "15pt"
-        plot.xaxis.axis_label_text_font_size = "15pt"
-        plot.xaxis.major_label_text_font_size = "15pt"
-        plot.yaxis.major_label_text_font_size = "13pt"
-        # plot.legend.location = "top_left"
-        # plot.legend.click_policy = "hide"
-    # widgets = column([select_metric])
-    dashboard = row([p])
-    doc.add_root(dashboard)
-    show(dashboard)
 def consolidate_to_single_df():
     # game_id_players = get_gameid_player_mapping()
     pickle_in = open("game_id_players.pickle", "rb")
@@ -358,421 +232,6 @@ def consolidate_to_single_df():
     # pickle_out = open("data.pickle","wb")
     # pickle.dump(data, pickle_out)
     # pickle_out.close()
-def position_matters(data):
-    def get_season_stats():
-        try:
-            season_stats = pd.read_parquet(data_path + 'season_stats_cleaned.parquet')
-        except:
-            season_stats = pd.read_csv("Seasons_Stats.csv")
-            season_stats['Pos'].replace('C-F', "C-PF", inplace = True)
-            season_stats['Pos'].replace('C-SF', "PF", inplace=True)
-            season_stats['Pos'].replace('F', "SF", inplace=True)
-            season_stats['Pos'].replace('F-C', "PF", inplace=True)
-            season_stats['Pos'].replace('G', "SG", inplace=True)
-            season_stats['Pos'].replace('PF-C', "C-PF", inplace=True)
-            season_stats['Pos'].replace('F-G', "PF-SF", inplace=True)
-            season_stats['Pos'].replace('G-F', "PF-SF", inplace=True)
-            season_stats['Pos'].replace('SF-PF', "PF-SF", inplace=True)
-            season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
-            season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
-            season_stats['Pos'].replace('SG-SF', "SF-SG", inplace=True)
-            season_stats['Pos'].replace('PG-SG', "SG-PG", inplace=True)
-            season_stats['Pos'].replace('SF-PG', "SG", inplace=True)
-            season_stats['Pos'].replace('SG-PF', "SF", inplace=True)
-        return season_stats
-    def make_source(df, metric = 'percent'):
-        return ColumnDataSource(data = {'x': df.index, 'y': df[metric], 'percent': df['percent'], 'made': df['shot_made'], 'attempts': df['count']})
-    def update_metric(attr, old, new):
-        if new == 'Percentage':
-            src.data = dict(make_source(groupby_position,).data)
-            p.yaxis.axis_label = 'Percentage (%)'
-        elif new == 'Attempts':
-            src.data = dict(make_source(groupby_position,'count').data)
-            p.yaxis.axis_label = 'Shots'
-        elif new == "Shots Made":
-            src.data = dict(make_source(groupby_position,'shot_made').data)
-            p.yaxis.axis_label = 'Shots'
-
-    doc = curdoc()
-    doc.clear()
-    doc.title = 'NBA FREE THROWS'
-
-    season_stats = get_season_stats()
-    # find how many times player played at each position
-    tmp = season_stats.groupby(['Player', 'Pos']).agg({'Pos':'count'}).unstack()
-    # find how max of each player's position, put that as player's position
-    positions = pd.DataFrame(tmp.idxmax(axis=1), columns=['pos'])
-    positions['position'] = [x[1] for x in positions['pos']]
-    positions.index = [x.lower().replace('*', '') for x in positions.index]
-    positions['player'] = positions.index
-    positions = clean_player2(positions)
-    positions.index = positions['player']
-    positions.drop(['pos', 'player'], 1, inplace=True)
-
-    data['player'] = data['player'].str.lower() # lower names so join works
-    full_data = pd.merge(data, positions, how = 'inner', right_index=True, left_on = 'player')
-    # find simple stats for each position
-    groupby_position = pd.DataFrame(full_data.groupby(['position'])['shot_made'].sum())
-    groupby_position['count'] = full_data.groupby(['position'])['shot_made'].count()
-    groupby_position['percent'] = 100 * groupby_position['shot_made'] / groupby_position['count']
-    groupby_position = groupby_position.sort_values("percent", ascending=False)
-    src = make_source(groupby_position)
-
-    select_metric = Select(title='Metric', value=f"Percentage", options=['Percentage', "Attempts", "Shots Made"], width=175)
-    select_metric.on_change('value', update_metric)
-
-    p = figure(plot_width=1100, plot_height=750, x_range=list(groupby_position.index),
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
-               x_axis_label="Position", y_axis_label="Percentage (%)", toolbar_location="right", title=f"Free Throw Stats by Position")
-    p.vbar('x', top='y', source=src, width=0.6, alpha=0.75, name='bars', fill_color='orangered', line_color = 'black', line_width = 2)
-    p.add_tools(HoverTool(mode='vline', tooltips=[("Position", "@x"), ("Percentage (%)", "@percent{(0.0)}"),("Attempts", "@attempts{(0,0)}"), ("Shots Made", "@made{(0,0)}"),],))
-    for plot in [p,]:
-        plot.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
-        plot.yaxis.ticker.desired_num_ticks=15
-        plot.outline_line_width = 3
-        plot.outline_line_alpha = 0.3
-        plot.axis.minor_tick_line_alpha = 0
-        plot.axis.major_tick_line_color = 'black'
-        plot.axis.major_tick_in = -1
-        plot.yaxis.major_label_text_font_style = 'bold'
-        plot.xaxis.major_label_text_font_style = 'bold'
-        plot.yaxis.major_label_text_font = "Arial"
-        plot.xaxis.major_label_text_font = "Arial"
-        plot.title.align = 'center'
-        plot.title.text_font_size = '12pt'
-        plot.xaxis.axis_line_width = 0
-        plot.yaxis.axis_line_width = 0
-        plot.yaxis.axis_label_text_font_style = "bold"
-        plot.xaxis.axis_label_text_font_style = "bold"
-        plot.toolbar.active_scroll = "auto"
-        plot.toolbar.autohide = True
-        plot.xgrid.visible = False
-        plot.yaxis.axis_label_text_font_size = "15pt"
-        plot.xaxis.axis_label_text_font_size = "15pt"
-        plot.xaxis.major_label_text_font_size = "15pt"
-        plot.yaxis.major_label_text_font_size = "13pt"
-        # plot.legend.location = "top_left"
-        # plot.legend.click_policy = "hide"
-    widgets = column([select_metric])
-    dashboard = row([widgets, p])
-    doc.add_root(dashboard)
-    show(dashboard)
-def make_home_away_charts(data):
-    def home_away(data_, szn):
-        data_ = data_[data_['season'] == szn]
-        home_shot_made = data_[data_['Players_team'] == 'home']['shot_made'].copy()
-        away_shot_made = data_[data_['Players_team'] == 'away']['shot_made'].copy()
-        home_versus_away = {'made_home': home_shot_made.sum(),
-                            'made_away': away_shot_made.sum(),
-                            'total_home': len(home_shot_made.index),
-                            'total_away': len(away_shot_made.index),
-                            'home_made_percentage': home_shot_made.sum() / len(home_shot_made.index),
-                            'away_made_percentage': away_shot_made.sum() / len(away_shot_made.index)}
-        return home_versus_away
-
-    fool = {str(i): home_away(data, i) for i in data['season'].unique()}
-
-    away = [fool[i]['away_made_percentage'] * 100 for i in data['season'].unique()]
-    home = [fool[i]['home_made_percentage'] * 100 for i in data['season'].unique()]
-
-    home_shots = len(data[data['Players_team'] == 'home']['shot_made'].index)
-    away_shots = len(data[data['Players_team'] == 'away']['shot_made'].index)
-
-    p = figure(plot_width=1100, plot_height=750, y_range = (72, 79),
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
-               x_axis_label="Position", y_axis_label="Percentage (%)", toolbar_location="right", title=f"HOME COURT ADVANTAGE")
-    src_away = ColumnDataSource(data = {'x': [x - 0.2 for x in range(len(data['season'].unique()))], 'y': away, 'season': list(data['season'].unique()), 'label': ['Away' for _ in data['season'].unique()]})
-    src_home = ColumnDataSource(data = {'x': [x + 0.2 for x in range(len(data['season'].unique()))], 'y': home, 'season': list(data['season'].unique()), 'label': ['Home' for _ in data['season'].unique()]})
-    p.vbar('x', top='y', source=src_home, width=0.3, alpha=0.65, legend_label='Home', fill_color='orangered', line_color = 'orangered', line_width = 2, name = 'home')
-    p.vbar('x', top='y', source=src_away, width=0.3, alpha=0.65, legend_label='Away', fill_color='blue', line_color = 'blue', line_width = 2, name = 'away')
-    home_avg = p.line([i for i in range(len(home))], [np.mean(home) for x in home], color = 'orangered', legend_label = 'Home Average',name='home_avg',  line_width = 4)
-    home_avg.visible = False
-    away_avg = p.line([i for i in range(len(away))], [np.mean(away) for x in away], color = 'blue', legend_label = 'Away Average',name='away_avg', line_width = 4)
-    away_avg.visible = False
-    p.add_tools(HoverTool(mode='vline', tooltips=[("Season", "@season"), ("Percentage (%)", "@y{(0.0)}"),],names = ['home', 'away']))
-    p.add_tools(HoverTool(mode='vline', tooltips=[("Average (%)", "@y{(0.0)}"),],names = ['home_avg', 'away_avg']))
-    p.xaxis.major_label_overrides = {i: v for i, v in enumerate(data['season'].unique())}
-
-    fdata = pd.Series({'Away': away_shots, 'Home': home_shots}).reset_index(name='attempts').rename(columns={'index': 'category'})
-    fdata['angle'] = fdata['attempts'] / fdata['attempts'].sum() * 2 * np.pi
-    fdata['color'] = ['blue', 'orangered', ]
-    fdata['percent'] = (100* fdata['attempts'] / fdata['attempts'].sum()).round(1)
-
-    w = figure(plot_height=750, title="Away Court Advantage", toolbar_location=None,)
-
-    w.wedge(x=0, y=1, radius=0.8,
-            start_angle=cumsum('angle', include_zero=True), end_angle=cumsum('angle'),
-            line_color="white", fill_color='color', legend_field='category', source=fdata, alpha = 0.75)
-    w.add_tools(HoverTool(tooltips=[("Percentage (%)", "@percent{(0.0)}"),("Attempts", "@attempts{(0,0)}")],))
-    w.outline_line_alpha = 0
-    w.yaxis.ticker = []
-    w.xaxis.ticker = []
-    w.legend.click_policy = "hide"
-    w.xaxis.axis_line_width = 0
-    w.yaxis.axis_line_width = 0
-    w.title.align = 'center'
-    w.title.text_font_size = '12pt'
-
-    for plot in [p]:
-        plot.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
-        plot.yaxis.ticker.desired_num_ticks=10
-        plot.xaxis.major_label_orientation = np.pi / 4
-        plot.xaxis.ticker.desired_num_ticks=len(data['season'].unique())
-        plot.outline_line_width = 3
-        plot.outline_line_alpha = 0.3
-        plot.axis.minor_tick_line_alpha = 0
-        plot.axis.major_tick_line_color = 'black'
-        plot.axis.major_tick_in = -1
-        plot.yaxis.major_label_text_font_style = 'bold'
-        plot.xaxis.major_label_text_font_style = 'bold'
-        plot.yaxis.major_label_text_font = "Arial"
-        plot.xaxis.major_label_text_font = "Arial"
-        plot.title.align = 'center'
-        plot.title.text_font_size = '12pt'
-        plot.xaxis.axis_line_width = 0
-        plot.yaxis.axis_line_width = 0
-        plot.yaxis.axis_label_text_font_style = "bold"
-        plot.xaxis.axis_label_text_font_style = "bold"
-        plot.toolbar.active_scroll = "auto"
-        plot.toolbar.autohide = True
-        plot.xgrid.visible = False
-        plot.yaxis.axis_label_text_font_size = "15pt"
-        plot.xaxis.axis_label_text_font_size = "15pt"
-        plot.xaxis.major_label_text_font_size = "12pt"
-        plot.yaxis.major_label_text_font_size = "13pt"
-        # plot.legend.location = "top_left"
-        plot.legend.click_policy = "hide"
-
-    dashboard = row([p, w])
-    doc.add_root(dashboard)
-    show(dashboard)
-    # fig1 = plt.figure()
-    # fig1.suptitle('AWAY COURT ADVANTAGE', fontsize=20)
-    # ax2 = fig1.add_subplot(111)
-    # ax2.pie([home_shots, away_shots], labels=['HOME - {:.1f}%'.format(100 * home_shots / (home_shots + away_shots)),
-    #                                           'AWAY - {:.1f}%'.format(100 * away_shots / (home_shots + away_shots))],
-    #         startangle=90, labeldistance=0.35, textprops={'fontsize': 18, 'color': 'white', 'weight': 'bold'})
-    # plt.show()
-def salary_AND_best_worst(data):
-    score_before = []
-    for x in data.itertuples():
-        if x.shot_made == 0: # if shot was missed, just look at the score
-            score_before.append(x.score_after)
-        else: # else, see which team the player was on, then subtract one from that team's score
-            score = x.score_after
-            first_num = int(score.split(' - ')[0])
-            second_num = int(score.split(' - ')[1])
-            if x.Players_team == 'away':
-                first_num -= 1
-            else:
-                second_num -= 1
-            score_before.append(f'{first_num} - {second_num}')
-
-    data['score_before'] = pd.Series(score_before, index=data.index)
-    data['Score_Difference_abs'] = pd.Series([np.abs(int(x.split('-')[0]) - int(x.split('-')[1])) for x in data["score_before"]], index=data.index)
-    data['Score_Difference'] = pd.Series(
-        [int(x.split('-')[0]) - int(x.split('-')[1]) for x in data["score_before"]], index=data.index)
-
-    score_dif = pd.DataFrame(data.groupby(['Score_Difference'])['shot_made'].sum())
-    score_dif['count'] = data.groupby(['Score_Difference'])['shot_made'].count()
-    score_dif['percent'] = 100 * score_dif['shot_made'] / score_dif['count']
-    score_dif = score_dif[score_dif.index >= -40]
-    score_dif = score_dif[score_dif.index <= 40]
-
-    pp = figure(plot_width=1100, plot_height=500, y_range = (60, 85),
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
-               x_axis_label="Difference in Score", y_axis_label="Percentage (%)", toolbar_location="right", title=f"HOME COURT ADVANTAGE")
-    src = ColumnDataSource({'x': list(score_dif.index), 'y':score_dif['percent'].tolist(), 'bottom' : [0 for _ in range(len(score_dif.index))]})
-    pp.vbar('x', top='y',bottom='bottom', source=src, width = 0.6, color='blue', line_color='blue', alpha=0.65,)
-    pp.add_tools(HoverTool(tooltips=[("Difference in Score", "@x"),("Percentage (%)", "@y{(0.0)}"),],))
-
-    score_dif_abs = pd.DataFrame(data.groupby(['Score_Difference_abs'])['shot_made'].sum())
-    score_dif_abs['count'] = data.groupby(['Score_Difference_abs'])['shot_made'].count()
-    score_dif_abs['percent'] = 100 * score_dif_abs['shot_made'] / score_dif_abs['count']
-    score_dif_abs = score_dif_abs[score_dif_abs.index >= -40]
-    score_dif_abs = score_dif_abs[score_dif_abs.index <= 40]
-
-    ww = figure(plot_width=1100, plot_height=500, y_range = (60, 85),
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
-               x_axis_label="Difference in Score (abs)", y_axis_label="Percentage (%)", toolbar_location="right", title=f"HOME COURT ADVANTAGE")
-    abs_src = ColumnDataSource({'x': list(score_dif_abs.index), 'y':score_dif_abs['percent'].tolist(), 'bottom' : [0 for _ in range(len(score_dif_abs.index))]})
-    ww.vbar('x', top='y',bottom='bottom', source=abs_src, width = 0.6, color='blue', line_color='blue', alpha=0.65,)
-    ww.add_tools(HoverTool(tooltips=[("Difference in Score", "@x"),("Percentage (%)", "@y{(0.0)}"),],))
-
-    # ----------------------------------------
-
-    salaries = pd.read_csv(path + 'salary data/playersalaries.csv')
-    salaries['Player'] = salaries['Player'].str.lower()
-    salaries['Player'] = pd.Series([x.replace('.', '').replace("'", '') for x in salaries.Player], index=salaries.index)
-
-    new = pd.DataFrame(data.groupby(['player']).agg({'shot_made':'sum'}))
-    new['attempts'] = data.groupby(['player']).agg({'shot_made': 'count'})
-    new['percent'] = 100*new['shot_made']/new['attempts']
-    new['salary'] = salaries.groupby(['Player'])['AdjustedSalary'].mean()
-    new['salary'].fillna(80000, inplace=True)
-    new['salary'] = new['salary'].astype('int64')
-    new = new[new['attempts']>30]
-    new.index = [' '.join([x.split(' ')[0].capitalize(),x.split(' ')[1].capitalize()]) for x in new.index]
-
-
-    def update_slider(attr, old, new):
-        pass
-
-    slider = Slider(start=30, end=new['attempts'].max(), step=100, value=30, title="Minimum Attempts", width = 200)
-    slider.on_change('value', update_slider)
-
-
-    best_shooters = new.sort_values(by = 'percent', ascending=False).head(12)
-    best_names = list(best_shooters.index)
-    best_names.reverse()
-
-    worst_shooters = new.sort_values(by = 'percent').head(10)
-    worst_names = list(worst_shooters.index)
-    p = figure(plot_width=600, plot_height=500, y_range = worst_names,
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
-               x_axis_label="Percentage (%)", toolbar_location="right", title=f"Worst Shooters in NBA History")
-    worst_source = ColumnDataSource(data = {'right': worst_shooters['percent'], 'y': worst_names, 'attempts':worst_shooters['attempts']})
-    p.hbar('y', right='right', source = worst_source,  height=0.6, alpha=0.65,  fill_color='blue', line_color = 'blue', line_width = 2, name = 'away')
-    p.add_tools(HoverTool(tooltips=[("Player", "@y"),("Percentage (%)", "@right{(0.0)}"),("Attempts", "@attempts{(0,0)}"),],))
-
-    w = figure(plot_width=600, plot_height=500, y_range = best_names,
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
-               x_axis_label="Percentage (%)", toolbar_location="right", title=f"Best Shooters in NBA History")
-    best_source = ColumnDataSource(data = {'right': best_shooters['percent'].sort_values(), 'y': best_names, 'attempts':best_shooters.sort_values('percent')['attempts']})
-    w.hbar('y', right='right', source = best_source,  height=0.6, alpha=0.65,  fill_color='orangered', line_color = 'orangered', line_width = 2, name = 'away')
-    w.add_tools(HoverTool(tooltips=[("Player", "@y"),("Percentage (%)", "@right{(0.0)}"),("Attempts", "@attempts{(0,0)}")],))
-
-    # ----------------------------------------
-
-    z = figure(plot_width=900, plot_height=500,
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
-               y_axis_label="Percentage (%)", toolbar_location="right", title=f"Mean Salaries vs Career FT% in the NBA")
-    scatter_src = ColumnDataSource(data = {'x': new['salary'], 'y': new['percent'], 'player':new.index})
-    z.circle('x', 'y', source=scatter_src,  alpha=0.65,  fill_color='orangered', line_color = 'blue', line_width = 2, name = 'away')
-    z.add_tools(HoverTool(tooltips=[("Player", "@player"),("Salary", "@x{(0,0)}"),("Percentage (%)", "@y")],))
-    z.xaxis[0].formatter = NumeralTickFormatter(format="$0.00 a")
-    # ----------------------------------------
-    def get_season_stats():
-        try:
-            season_stats = pd.read_parquet(data_path + 'season_stats_cleaned.parquet')
-        except:
-            season_stats = pd.read_csv("Seasons_Stats.csv")
-            season_stats['Pos'].replace('C-F', "C-PF", inplace = True)
-            season_stats['Pos'].replace('C-SF', "PF", inplace=True)
-            season_stats['Pos'].replace('F', "SF", inplace=True)
-            season_stats['Pos'].replace('F-C', "PF", inplace=True)
-            season_stats['Pos'].replace('G', "SG", inplace=True)
-            season_stats['Pos'].replace('PF-C', "C-PF", inplace=True)
-            season_stats['Pos'].replace('F-G', "PF-SF", inplace=True)
-            season_stats['Pos'].replace('G-F', "PF-SF", inplace=True)
-            season_stats['Pos'].replace('SF-PF', "PF-SF", inplace=True)
-            season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
-            season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
-            season_stats['Pos'].replace('SG-SF', "SF-SG", inplace=True)
-            season_stats['Pos'].replace('PG-SG', "SG-PG", inplace=True)
-            season_stats['Pos'].replace('SF-PG', "SG", inplace=True)
-            season_stats['Pos'].replace('SG-PF', "SF", inplace=True)
-        return season_stats
-    def make_source(df, metric = 'percent'):
-        return ColumnDataSource(data = {'x': df.index, 'y': df[metric], 'percent': df['percent'], 'made': df['shot_made'], 'attempts': df['count']})
-    def update_metric(attr, old, new):
-        if new == 'Percentage':
-            src.data = dict(make_source(groupby_position,).data)
-            p.yaxis.axis_label = 'Percentage (%)'
-        elif new == 'Attempts':
-            src.data = dict(make_source(groupby_position,'count').data)
-            p.yaxis.axis_label = 'Shots'
-        elif new == "Shots Made":
-            src.data = dict(make_source(groupby_position,'shot_made').data)
-            p.yaxis.axis_label = 'Shots'
-
-    season_stats = get_season_stats()
-    # find how many times player played at each position
-    tmp = season_stats.groupby(['Player', 'Pos']).agg({'Pos':'count'}).unstack()
-    # find how max of each player's position, put that as player's position
-    positions = pd.DataFrame(tmp.idxmax(axis=1), columns=['pos'])
-    positions['position'] = [x[1] for x in positions['pos']]
-    positions.index = [x.lower().replace('*', '') for x in positions.index]
-    positions['player'] = positions.index
-    positions = clean_player2(positions)
-    positions.index = positions['player']
-    positions.drop(['pos', 'player'], 1, inplace=True)
-
-    data['player'] = data['player'].str.lower() # lower names so join works
-    full_data = pd.merge(data, positions, how = 'inner', right_index=True, left_on = 'player')
-    # find simple stats for each position
-    groupby_position = pd.DataFrame(full_data.groupby(['position'])['shot_made'].sum())
-    groupby_position['count'] = full_data.groupby(['position'])['shot_made'].count()
-    groupby_position['percent'] = 100 * groupby_position['shot_made'] / groupby_position['count']
-    groupby_position = groupby_position.sort_values("percent", ascending=False)
-    src = make_source(groupby_position)
-
-    select_metric = Select(title='Metric', value=f"Percentage", options=['Percentage', "Attempts", "Shots Made"], width=175)
-    select_metric.on_change('value', update_metric)
-
-    zz = figure(plot_width=600, plot_height=500, x_range=list(groupby_position.index),
-               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
-               x_axis_label="Position", y_axis_label="Percentage (%)", toolbar_location="right", title=f"Free Throw Stats by Position")
-    zz.vbar('x', top='y', source=src, width=0.6, alpha=0.75, name='bars', fill_color='orangered', line_color = 'black', line_width = 2)
-    zz.add_tools(HoverTool(mode='vline', tooltips=[("Position", "@x"), ("Percentage (%)", "@percent{(0.0)}"),("Attempts", "@attempts{(0,0)}"), ("Shots Made", "@made{(0,0)}"),],))
-
-    # ----------------------------------------
-    p.ygrid.visible = False
-    w.ygrid.visible = False
-    z.xaxis.major_label_orientation = np.pi / 4
-
-    for plot in [pp, ww]:
-        plot.yaxis.ticker.desired_num_ticks=10
-    for plot in [p, w, z,]:
-        plot.x_range.start = 0
-        plot.xaxis.ticker.desired_num_ticks=len(data['season'].unique())
-    for plot in [p, w, z, pp, ww, zz]:
-        plot.outline_line_width = 3
-        plot.outline_line_alpha = 0.3
-        plot.axis.minor_tick_line_alpha = 0
-        plot.axis.major_tick_line_color = 'black'
-        plot.axis.major_tick_in = -1
-        plot.yaxis.major_label_text_font_style = 'bold'
-        plot.xaxis.major_label_text_font_style = 'bold'
-        plot.yaxis.major_label_text_font = "Arial"
-        plot.xaxis.major_label_text_font = "Arial"
-        plot.title.align = 'center'
-        plot.title.text_font_size = '12pt'
-        plot.xaxis.axis_line_width = 0
-        plot.yaxis.axis_line_width = 0
-        plot.yaxis.axis_label_text_font_style = "bold"
-        plot.xaxis.axis_label_text_font_style = "bold"
-        plot.toolbar.active_scroll = "auto"
-        plot.toolbar.autohide = True
-
-        plot.yaxis.axis_label_text_font_size = "10pt"
-        plot.xaxis.axis_label_text_font_size = "10pt"
-        plot.xaxis.major_label_text_font_size = "10pt"
-        plot.yaxis.major_label_text_font_size = "10pt"
-        # plot.legend.location = "top_left"
-        # plot.legend.click_policy = "hide"
-
-    tab1 = Panel(child=row([slider, w]), title="Best Shooters")
-    tab2 = Panel(child=row([slider, p]), title="Worst Shooters")
-    tab3 = Panel(child=column([z]), title="Salary Scatterplot")
-    tab4 = Panel(child=column([pp]), title="Percentage across Score Difference")
-    tab5 = Panel(child=column([ww]), title="Percentage across Absolute Score Difference")
-    tab6 = Panel(child=row([select_metric, zz]), title="Position Matters")
-    tt = Tabs(tabs=[tab1, tab2, tab3, tab4, tab5, tab6])
-    dashboard = column([tt])
-    curdoc().add_root(dashboard)
-    show(dashboard)
-
-
-# df = consolidate_to_single_df()
-
-pickle_in = open(path + "data.pickle","rb")
-df = pickle.load(pickle_in)
-print(2, datetime.datetime.now()-timee)
-salary_AND_best_worst(df)
-make_home_away_charts(df)
-improving_ft(df)
-print()
 def make_map(data):
     # state_data = pd.DataFrame(data.groupby(['State'])['shot_made'].sum())
     # bb = data.groupby(['State'])['shot_made'].count()
@@ -879,44 +338,430 @@ def make_map(data):
 
     m3.scatter(city_data['lon'].values, city_data['lat'].values, latlon=True, c='black', s=60)
     plt.legend(loc = 'lower left')
-# make_map(df)
-def time_charts(data):
-    period_df = pd.DataFrame(data.groupby(['period'])['shot_made'].sum())
-    period_df['count'] =data.groupby(['period'])['shot_made'].count()
-    period_df['percent'] = 100*period_df['shot_made']/period_df['count']
+def get_season_stats():
+    try:
+        season_stats = pd.read_parquet(data_path + 'season_stats_cleaned.parquet')
+    except:
+        season_stats = pd.read_csv("Seasons_Stats.csv")
+        season_stats['Pos'].replace('C-F', "C-PF", inplace = True)
+        season_stats['Pos'].replace('C-SF', "PF", inplace=True)
+        season_stats['Pos'].replace('F', "SF", inplace=True)
+        season_stats['Pos'].replace('F-C', "PF", inplace=True)
+        season_stats['Pos'].replace('G', "SG", inplace=True)
+        season_stats['Pos'].replace('PF-C', "C-PF", inplace=True)
+        season_stats['Pos'].replace('F-G', "PF-SF", inplace=True)
+        season_stats['Pos'].replace('G-F', "PF-SF", inplace=True)
+        season_stats['Pos'].replace('SF-PF', "PF-SF", inplace=True)
+        season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
+        season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
+        season_stats['Pos'].replace('SG-SF', "SF-SG", inplace=True)
+        season_stats['Pos'].replace('PG-SG', "SG-PG", inplace=True)
+        season_stats['Pos'].replace('SF-PG', "SG", inplace=True)
+        season_stats['Pos'].replace('SG-PF', "SF", inplace=True)
+    return season_stats
+doc = curdoc()
+doc.clear()
+doc.title = 'NBA Free Throw Analysis'
 
-    fig1 = plt.figure()
-    ax1 = fig1.add_subplot(111)
-    ax1.bar(period_df.index, period_df.percent)
-    ax1.set(ylim = [60, 85], ylabel = 'Percentage (%)', xlabel = 'Period', xticklabels =  ['','Q1','Q2','Q3','Q4','OT','2OT','3OT','4OT',])
-    ax1.plot([period_df.index.min(), period_df.index.max()], [period_df.percent.min(),period_df.percent.max()], c = 'orange', linewidth = 6,linestyle='--')
-    ax1.tick_params(axis='both',which = 'both', labelsize=16)
-    t_o_g = []
-    for x in df.itertuples():
-        p = int(x.time.split(':')[0])
-        if x.period == float(1):
-            p = p + 36
-        elif x.period == float(2):
-            p = p+24
-        elif x.period == float(3):
-            p = p+12
+path = os.getcwd().replace("\\", '/') + '/'
+data_path = path + 'data/'
+timee = datetime.datetime.now()
+print(timee)
+season_stats = get_season_stats()
+# teamNames = get_team_names()
+
+# dictionary with all games for each team between 2016-2017 and 2020 seasons or 2008-2009 to 2015-2016 seasons. Structure:
+# year{
+#       team{
+#           playoffs / regular season{
+#                       url }
+# pickle_in = open(data_path + "all_games_all_years_2009_2016.pickle", "rb")
+# data_2016 = pickle.load(pickle_in)
+# pickle_in = open(data_path + "all_games_all_years_2017_2020.pickle", "rb")
+# data_2020 = pickle.load(pickle_in)
+# print(data_2016.keys(), data_2016[list(data_2016.keys())[0]])
+# SQLITE3 DATABASE (matchup)
+# engine = sqlite3.connect(data_path + 'nba_matchup_data.db')
+# # SQLITE3 DATABASE (play by play)
+# engine_playbyplay = sqlite3.connect(data_path + 'nba_playbyplay_data.db')
+# # SQLITE3 DATABASE (boxscore)
+# engine_boxscore = sqlite3.connect(data_path + 'nba_boxscore_data.db')
+# # SQLITE3 DATABASE (freethrow)
+# engine_freethrow = sqlite3.connect(data_path + 'nba_freethrow_data.db')
+# MONGODB DATABASE
+# mongo_client = pymongo.MongoClient('localhost', 27017)
+# db = mongo_client['NBA']
+# collection = db['basic_game_info']
+# data_2016.update(data_2020)
+# # all game_id's in a list
+# all_games = [item.split('gameId=')[1] for sublist in NestedDictValues(data_2016) for item in sublist]
+
+# df = consolidate_to_single_df()
+
+# pickle_in = open(path + "data.pickle","rb")
+# df = pickle.load(pickle_in)
+data = pd.read_parquet(path + 'nba_free_throw_data.parquet')
+# ----------------------------------------
+def update_absolute(attr, old, new):
+    score_dif_source.data = dict(make_score_dif_source(new).data)
+def make_score_dif_source(i):
+    if i == "+/- Difference":
+        c = [int(x.split('-')[0]) - int(x.split('-')[1]) for x in data["score_before"]]
+    elif i == 'Absolute Difference':
+        c = [np.abs(int(x.split('-')[0]) - int(x.split('-')[1])) for x in data["score_before"]]
+    data['Score_Difference'] = pd.Series(c, index=data.index)
+    score_dif = pd.DataFrame(data.groupby(['Score_Difference'])['shot_made'].sum())
+    score_dif['count'] = data.groupby(['Score_Difference'])['shot_made'].count()
+    score_dif['percent'] = 100 * score_dif['shot_made'] / score_dif['count']
+    score_dif = score_dif[(score_dif.index >= -40) & (score_dif.index <= 40)]
+    return ColumnDataSource({'x': list(score_dif.index), 'y': score_dif['percent'].tolist(), })
+
+select_absolute = Select(title='+/- or Absolute?', value=f"+/- Difference", options=['+/- Difference', "Absolute Difference", ], width=175)
+select_absolute.on_change('value', update_absolute)
+
+t_o_g = []
+score_before = []
+
+for x in data[['shot_made', "score_after", 'period', 'minute_of_game', 'Players_team']].itertuples():
+    if x.shot_made == 0: # if shot was missed, just look at the score
+        score_before.append(x.score_after)
+    else: # else, see which team the player was on, then subtract one from that team's score
+        score = x.score_after
+        first_num = int(score.split(' - ')[0])
+        second_num = int(score.split(' - ')[1])
+        if x.Players_team == 'away':
+            first_num -= 1
         else:
-            p = p
-        t_o_g.append('{}'.format(p))
-    df['time_of_game'] = pd.Series(t_o_g, index = df.index)
-    time_of_game = pd.DataFrame(df.groupby(['time_of_game'])['shot_made'].sum())
-    time_of_game['attempts'] = df.groupby(['time_of_game'])['shot_made'].count()
-    time_of_game['percent'] = 100* time_of_game['shot_made'] / time_of_game['attempts']
-    time_of_game.index = time_of_game.index.astype(int)
+            second_num -= 1
+        score_before.append(f'{first_num} - {second_num}')
 
-    fig2 = plt.figure()
-    ax2 = fig2.add_subplot(111)
-    ax2.bar(time_of_game.sort_index(ascending = False).index, time_of_game.sort_index()['percent'].values)
-    ax2.bar([0, 12, 24, 36], [time_of_game.sort_index(ascending = False)['percent'].values[y] for y in [0, 12, 24, 36]])
-    ax2.tick_params(axis = 'x', which = 'both', labelsize=12)
-    ax2.set(ylim= [60,85],xticks= [x for x in range(48)],xticklabels = [x for x in range(48)][::1],ylabel = 'Percentage (%)', xlabel = 'Minute of Game ')
-    ax2.tick_params(axis='y', labelsize=16)
-time_charts(df)
+    if x.period == float(4):
+        out = x.minute_of_game + 36
+    elif x.period == float(2):
+        out = x.minute_of_game + 12
+    elif x.period == float(3):
+        out = x.minute_of_game + 24
+    else:
+        out = x.minute_of_game
+    t_o_g.append(out)
 
+data['time_of_game'] = t_o_g
+data['score_before'] = pd.Series(score_before, index=data.index)
+score_dif_source = make_score_dif_source(select_absolute.value)
+score_dif_chart = figure(plot_width=900, plot_height=500, y_range = (60, 85),
+           tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+           x_axis_label="Difference in Score", y_axis_label="Percentage (%)", toolbar_location="right", title=f"HOME COURT ADVANTAGE")
+score_dif_chart.vbar('x', top='y',bottom=0, source=score_dif_source, width = 0.6, color='blue', line_color='blue', alpha=0.65,)
+score_dif_chart.add_tools(HoverTool(tooltips=[("Difference in Score", "@x"),("Percentage (%)", "@y{(0.0)}"),],))
+score_dif_chart.yaxis.ticker.desired_num_ticks = 10
+# ----------------------------------------
 
+what = get_salary_scatter_data(data)
+what.index = [' '.join([x.split(' ')[0].capitalize(),x.split(' ')[1].capitalize()]) for x in what.index]
+
+def update_slider(attr, old, new):
+    new_what = what[what['attempts'] >= int(new)].copy()
+    scatter_src.data = dict(ColumnDataSource(data={'x': new_what['salary'], 'y': new_what['percent'], 'player': new_what.index, 'attempts': new_what['attempts'], }).data)
+    worst_shooters_ = new_what.sort_values(by='percent').head(10)
+    worst_names_ = list(worst_shooters_.index)
+    worst_source.data = dict(ColumnDataSource(data={'right': worst_shooters_['percent'], 'y': worst_names_, 'attempts': worst_shooters_['attempts']}).data)
+    worst_shooter_chart.y_range.factors = worst_names_
+    best_shooters_ = new_what.sort_values(by = 'percent', ascending=False).head(12)
+    best_names_ = list(best_shooters_.index)
+    best_names_.reverse()
+    best_source.data = dict(ColumnDataSource(data={'right': best_shooters_['percent'].sort_values(), 'y': best_names_, 'attempts': best_shooters_.sort_values('percent')['attempts']}).data)
+    best_shooter_chart.y_range.factors = best_names_
+
+slider = Slider(start=30, end=what['attempts'].max(), step=100, value=30, title="Minimum Attempts", width = 200)
+slider.on_change('value', update_slider)
+
+best_shooters = what.sort_values(by = 'percent', ascending=False).head(12)
+best_names = list(best_shooters.index)
+best_names.reverse()
+
+worst_shooters = what.sort_values(by = 'percent').head(10)
+worst_names = list(worst_shooters.index)
+worst_shooter_chart = figure(plot_width=600, plot_height=500, y_range = worst_names,
+           tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+           x_axis_label="Percentage (%)", toolbar_location="right", title=f"Worst Shooters in NBA History")
+worst_source = ColumnDataSource(data = {'right': worst_shooters['percent'], 'y': worst_names, 'attempts':worst_shooters['attempts']})
+worst_shooter_chart.hbar('y', right='right', source = worst_source,  height=0.6, alpha=0.65,  fill_color='blue', line_color = 'blue', line_width = 2, name = 'away')
+worst_shooter_chart.add_tools(HoverTool(tooltips=[("Player", "@y"),("Percentage (%)", "@right{(0.0)}"),("Attempts", "@attempts{(0,0)}"),],))
+worst_shooter_chart.ygrid.visible = False
+
+best_shooter_chart = figure(plot_width=600, plot_height=500, y_range = best_names,
+           tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+           x_axis_label="Percentage (%)", toolbar_location="right", title=f"Best Shooters in NBA History")
+best_source = ColumnDataSource(data = {'right': best_shooters['percent'].sort_values(), 'y': best_names, 'attempts':best_shooters.sort_values('percent')['attempts']})
+best_shooter_chart.hbar('y', right='right', source = best_source,  height=0.6, alpha=0.65,  fill_color='orangered', line_color = 'orangered', line_width = 2, name = 'away')
+best_shooter_chart.add_tools(HoverTool(tooltips=[("Player", "@y"),("Percentage (%)", "@right{(0.0)}"),("Attempts", "@attempts{(0,0)}")],))
+best_shooter_chart.ygrid.visible = False
+# -------------------------------------
+salary_scatter = figure(plot_width=900, plot_height=500, x_axis_label="Today's Adj. Salary",
+           tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+           y_axis_label="Percentage (%)", toolbar_location="right", title=f"Career FT% vs Mean Salaries in the NBA")
+scatter_src = ColumnDataSource(data = {'x': what['salary'], 'y': what['percent'], 'player':what.index, 'attempts': what['attempts'],})
+salary_scatter.circle('x', 'y', source=scatter_src,  alpha=0.55, size = 6,  fill_color='orangered', line_color = 'blue', line_width = 2, name = 'away')
+salary_scatter.add_tools(HoverTool(tooltips=[("Player", "@player"),("Salary", "@x{(0,0)}"),("Percentage (%)", "@y"),("Attempts", "@attempts{(0,0)}"),],))
+salary_scatter.xaxis[0].formatter = NumeralTickFormatter(format="$0.0 a")
+salary_scatter.xaxis.major_label_orientation = np.pi / 4
+
+for plot in [best_shooter_chart, worst_shooter_chart, salary_scatter,]:
+    plot.x_range.start = 0
+# ----------------------------------------
+
+def make_position_bar_source(df, metric = 'percent'):
+    return ColumnDataSource(data = {'x': df.index, 'y': df[metric], 'percent': df['percent'], 'made': df['shot_made'], 'attempts': df['count']})
+def update_metric_position(attr, old, new):
+    if new == 'Percentage':
+        src.data = dict(make_position_bar_source(groupby_position,).data)
+        position_matters_bar.yaxis.axis_label = 'Percentage (%)'
+        position_matters_bar.title.text = f"Percentage by Position"
+    elif new == 'Attempts':
+        src.data = dict(make_position_bar_source(groupby_position,'count').data)
+        position_matters_bar.yaxis.axis_label = 'Shots'
+        position_matters_bar.title.text = f"Shots Attempted by Position"
+    elif new == "Shots Made":
+        src.data = dict(make_position_bar_source(groupby_position,'shot_made').data)
+        position_matters_bar.yaxis.axis_label = 'Shots'
+        position_matters_bar.title.text = f"Shots Made by Position"
+
+select_metric_position = Select(title='Metric', value=f"Percentage", options=['Percentage', "Attempts", "Shots Made"], width=175)
+select_metric_position.on_change('value', update_metric_position)
+
+# find how many times player played at each position
+tmp = season_stats.groupby(['Player', 'Pos']).agg({'Pos':'count'}).unstack()
+# find how max of each player's position, put that as player's position
+positions = pd.DataFrame(tmp.idxmax(axis=1), columns=['pos'])
+positions['position'] = [x[1] for x in positions['pos']]
+positions.index = [x.lower().replace('*', '') for x in positions.index]
+positions['player'] = positions.index
+positions = clean_player2(positions)
+positions.index = positions['player']
+positions.drop(['pos', 'player'], 1, inplace=True)
+data['player'] = data['player'].str.lower() # lower names so join works
+full_data = pd.merge(data, positions, how = 'inner', right_index=True, left_on = 'player')
+
+# find simple stats for each position
+groupby_position = pd.DataFrame(full_data.groupby(['position'])['shot_made'].sum())
+groupby_position['count'] = full_data.groupby(['position'])['shot_made'].count()
+groupby_position['percent'] = 100 * groupby_position['shot_made'] / groupby_position['count']
+groupby_position = groupby_position.sort_values("percent", ascending=False)
+
+src = make_position_bar_source(groupby_position)
+position_matters_bar = figure(plot_width=600, plot_height=500, x_range=list(groupby_position.index),
+           tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+           x_axis_label="Position", y_axis_label="Percentage (%)", toolbar_location="right", title=f"Percentage by Position")
+position_matters_bar.vbar('x', top='y', source=src, width=0.6, alpha=0.75, name='bars', fill_color='orangered', line_color = 'orangered', line_width = 2)
+position_matters_bar.add_tools(HoverTool(mode='vline', tooltips=[("Position", "@x"), ("Percentage (%)", "@percent{(0.0)}"),("Attempts", "@attempts{(0,0)}"), ("Shots Made", "@made{(0,0)}"),],))
+position_matters_bar.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
+
+# ----------------------------------------
+
+def home_away(data_, szn):
+    data_ = data_[data_['season'] == szn].copy()
+    home_shot_made = data_[data_['Players_team'] == 'home']['shot_made'].copy()
+    away_shot_made = data_[data_['Players_team'] == 'away']['shot_made'].copy()
+    home_versus_away = {'made_home': home_shot_made.sum(),
+                        'made_away': away_shot_made.sum(),
+                        'total_home': len(home_shot_made.index),
+                        'total_away': len(away_shot_made.index),
+                        'home_made_percentage': home_shot_made.sum() / len(home_shot_made.index),
+                        'away_made_percentage': away_shot_made.sum() / len(away_shot_made.index)}
+    return home_versus_away
+def update_metric_home_away(attr, old, new):
+    if new == 'Attempts':
+        away_ = [tmp_dict[i]['total_away'] * 100 for i in data['season'].unique()]
+        home_ = [tmp_dict[i]['total_home'] * 100 for i in data['season'].unique()]
+        home_away_bar.y_range.start = min(min(home_), min(away_)) * 0.75
+        home_away_bar.y_range.end = max(max(home_), max(away_)) * 1.2
+        home_away_bar.yaxis.axis_label = "Shots"
+    elif new == 'Shots Made':
+        away_ = [tmp_dict[i]['made_home'] * 100 for i in data['season'].unique()]
+        home_ = [tmp_dict[i]['made_away'] * 100 for i in data['season'].unique()]
+        home_away_bar.y_range.end = max(max(home_), max(away_)) * 1.2
+        home_away_bar.y_range.start = min(min(home_), min(away_)) * 0.75
+        home_away_bar.yaxis.axis_label = "Shots"
+    elif new == 'Percentage':
+        away_ = [tmp_dict[i]['away_made_percentage'] * 100 for i in data['season'].unique()]
+        home_ = [tmp_dict[i]['home_made_percentage'] * 100 for i in data['season'].unique()]
+        home_away_bar.y_range.end = 79
+        home_away_bar.y_range.start = 72
+        home_away_bar.yaxis.axis_label = "Percentage (%)"
+
+    src_away.data = dict(ColumnDataSource(
+        data={'x': [x - 0.2 for x in range(len(data['season'].unique()))], 'y': away_, 'season': list(data['season'].unique()), 'label': ['Away' for _ in data['season'].unique()]}).data)
+    src_home.data = dict(ColumnDataSource(
+        data={'x': [x + 0.2 for x in range(len(data['season'].unique()))], 'y': home_, 'season': list(data['season'].unique()), 'label': ['Home' for _ in data['season'].unique()]}).data)
+    home_avg_src.data = dict(ColumnDataSource(data={'x': [i for i in range(len(home_))], 'y': [np.mean(home_) for x in home_]}).data)
+    away_avg_src.data = dict(ColumnDataSource(data={'x': [i for i in range(len(away_))], 'y': [np.mean(away_) for x in away_]}).data)
+    home_away_bar.xaxis.ticker.desired_num_ticks = len(data['season'].unique())
+    home_away_bar.xaxis.major_label_overrides = {i: v for i, v in enumerate(data['season'].unique())}
+    # home_away_bar.xaxis.ticker = [i for i in data['season'].unique()]
+
+select_metric_home_away = Select(title='Metric', value=f"Percentage", options=['Percentage', "Attempts", "Shots Made"], width=175)
+select_metric_home_away.on_change('value', update_metric_home_away)
+
+tmp_dict = {str(i): home_away(data, i) for i in data['season'].unique()}
+away = [tmp_dict[i]['away_made_percentage'] * 100 for i in data['season'].unique()]
+home = [tmp_dict[i]['home_made_percentage'] * 100 for i in data['season'].unique()]
+
+home_away_bar = figure(plot_width=700, plot_height=500, y_range = (72, 79),
+           tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+           x_axis_label="Position", y_axis_label="Percentage (%)", toolbar_location="right", title=f"Home Court Advantage?")
+src_away = ColumnDataSource(data = {'x': [x - 0.2 for x in range(len(data['season'].unique()))], 'y': away, 'season': list(data['season'].unique()), 'label': ['Away' for _ in data['season'].unique()]})
+src_home = ColumnDataSource(data = {'x': [x + 0.2 for x in range(len(data['season'].unique()))], 'y': home, 'season': list(data['season'].unique()), 'label': ['Home' for _ in data['season'].unique()]})
+home_away_bar.vbar('x', top='y', source=src_home, width=0.3, alpha=0.65, legend_label='Home', fill_color='orangered', line_color = 'orangered', line_width = 2, name = 'home')
+home_away_bar.vbar('x', top='y', source=src_away, width=0.3, alpha=0.65, legend_label='Away', fill_color='blue', line_color = 'blue', line_width = 2, name = 'away')
+
+home_avg_src = ColumnDataSource(data={'x':[i for i in range(len(home))],'y':[np.mean(home) for x in home]})
+away_avg_src = ColumnDataSource(data={'x':[i for i in range(len(away))],'y':[np.mean(away) for x in away]})
+home_avg = home_away_bar.line('x', 'y', source = home_avg_src, color = 'orangered', legend_label = 'Home Average',name='home_avg',  line_width = 4)
+away_avg = home_away_bar.line('x', 'y', source = away_avg_src, color = 'blue', legend_label = 'Away Average',name='away_avg', line_width = 4)
+home_avg.visible = False
+away_avg.visible = False
+
+home_away_bar.add_tools(HoverTool(mode='vline', tooltips=[("Season", "@season"), ("Value", "@y{(0.0)}"),],names = ['home', 'away']))
+home_away_bar.add_tools(HoverTool(mode='vline', tooltips=[("Average (%)", "@y{(0.0)}"),],names = ['home_avg', 'away_avg']))
+home_away_bar.xaxis.ticker.desired_num_ticks = len(data['season'].unique())
+home_away_bar.xaxis.major_label_overrides = {i: v for i, v in enumerate(data['season'].unique())}
+
+home_away_bar.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
+home_away_bar.xaxis.major_label_orientation = np.pi / 4
+home_away_bar.xgrid.visible = False
+home_away_bar.legend.location = "top_left"
+home_away_bar.legend.click_policy = "hide"
+home_away_bar.legend.orientation = "horizontal"
+
+# ----------------------------------------
+def update_metric_period(attr, old, new):
+    if new == 'Attempts':
+        tmp = ColumnDataSource(data={'percent': period_df['percent'],'y': period_df['count'], 'x': period_df.index, 'attempts': period_df['count'],'periods':periods})
+        period_chart.yaxis.axis_label = 'Shots'
+        period_chart.title.text = f"Shots Attempted by Quarter"
+        period_chart.y_range.end = period_df['count'].max() * 1.2
+        period_chart.y_range.start = period_df['count'].min() * 0.75
+    elif new == 'Shots Made':
+        tmp = ColumnDataSource(data={'percent': period_df['percent'],'y': period_df['shot_made'], 'x': period_df.index, 'attempts': period_df['count'],'periods':periods})
+        period_chart.yaxis.axis_label = 'Shots'
+        period_chart.title.text = f"Shots Made by Quarter"
+        period_chart.y_range.end = period_df['shot_made'].max() * 1.2
+        period_chart.y_range.start = period_df['shot_made'].min() * 0.75
+    elif new == 'Percentage':
+        tmp = ColumnDataSource(data={'percent': period_df['percent'],'y': period_df['percent'], 'x': period_df.index, 'attempts': period_df['count'],'periods':periods})
+        period_chart.yaxis.axis_label = 'Percentage (%)'
+        period_chart.title.text = f"Percentage by Quarter"
+        period_chart.y_range.end = 85
+        period_chart.y_range.start = 60
+    period_src.data = dict(tmp.data)
+
+select_metric_period = Select(title='Metric', value=f"Percentage", options=['Percentage', "Attempts", "Shots Made"], width=175)
+select_metric_period.on_change('value', update_metric_period)
+
+period_df = pd.DataFrame(data.groupby(['period'])['shot_made'].sum())
+period_df['count'] =data.groupby(['period'])['shot_made'].count()
+period_df['percent'] = 100*period_df['shot_made']/period_df['count']
+periods = ['Q1','Q2','Q3','Q4','OT','2OT','3OT','4OT']
+period_chart = figure(plot_width=600, plot_height=500, tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+           x_axis_label="Percentage (%)", toolbar_location="right", title=f"Performance by Quarter", y_range = (60, 85))
+period_src = ColumnDataSource(data = {'percent': period_df['percent'], 'y': period_df['percent'], 'x': period_df.index, 'attempts':period_df['count'], 'periods':periods})
+period_chart.vbar('x', top='y', bottom=0, source = period_src,  width=0.6, alpha=0.65,  fill_color='blue', line_color = 'blue', line_width = 2, name = 'away')
+period_chart.add_tools(HoverTool(tooltips=[("Period", "@periods"),("Percentage (%)", "@percent{(0.0)}"),("Attempts", "@attempts{(0,0)}"),],))
+period_chart.xaxis.ticker.desired_num_ticks = len(period_df.index)
+period_chart.yaxis.ticker.desired_num_ticks = 10
+period_chart.xaxis.major_label_overrides = {i+1: v for i, v in enumerate(periods)}
+
+# ----------------------------------------
+
+def update_metric_minute(attr, old, new):
+    if new == 'Attempts':
+        tmp = ColumnDataSource(data={'percent': time_of_game_special['percent'],'y': time_of_game_special['attempts'], 'x': time_of_game_special.index, 'attempts': time_of_game_special['attempts'],})
+        tmp2 = ColumnDataSource(data={'percent': time_of_game_ns['percent'],'y': time_of_game_ns['attempts'], 'x': time_of_game_ns.index, 'attempts': time_of_game_ns['attempts'],})
+
+        time_of_game_chart.yaxis.axis_label = 'Shots'
+        time_of_game_chart.title.text = f"Shots Attempted by Minute"
+        time_of_game_chart.y_range.end = time_of_game['attempts'].max() * 1.2
+        time_of_game_chart.y_range.start = time_of_game['attempts'].min() * 0.75
+    elif new == 'Shots Made':
+        tmp2 = ColumnDataSource(data={'percent': time_of_game_ns['percent'],'y': time_of_game_ns['shot_made'], 'x': time_of_game_ns.index, 'attempts': time_of_game_ns['attempts'],})
+
+        tmp = ColumnDataSource(data={'percent': time_of_game_special['percent'],'y': time_of_game_special['shot_made'], 'x': time_of_game_special.index, 'attempts': time_of_game_special['attempts'],})
+        time_of_game_chart.yaxis.axis_label = 'Shots'
+        time_of_game_chart.title.text = f"Shots Made by Minute"
+        time_of_game_chart.y_range.end = time_of_game['shot_made'].max() * 1.2
+        time_of_game_chart.y_range.start = time_of_game['shot_made'].min() * 0.75
+    elif new == 'Percentage':
+        tmp = ColumnDataSource(data={'percent': time_of_game_special['percent'],'y': time_of_game_special['percent'], 'x': time_of_game_special.index, 'attempts': time_of_game_special['attempts'],})
+        tmp2 = ColumnDataSource(data={'percent': time_of_game_ns['percent'],'y': time_of_game_ns['percent'], 'x': time_of_game_ns.index, 'attempts': time_of_game_ns['attempts'],})
+
+        time_of_game_chart.yaxis.axis_label = 'Percentage (%)'
+        time_of_game_chart.title.text = f"Percentage by Minute"
+        time_of_game_chart.y_range.end = 85
+        time_of_game_chart.y_range.start = 60
+    time_of_game_special_src.data = dict(tmp.data)
+    time_of_game_src.data = dict(tmp2.data)
+
+select_metric_minute = Select(title='Metric', value=f"Percentage", options=['Percentage', "Attempts", "Shots Made"], width=175)
+select_metric_minute.on_change('value', update_metric_minute)
+
+time_of_game = pd.DataFrame(data.groupby(['time_of_game'])['shot_made'].sum())
+time_of_game['attempts'] = data.groupby(['time_of_game'])['shot_made'].count()
+time_of_game['percent'] = 100 * time_of_game['shot_made'] / time_of_game['attempts']
+time_of_game.index = time_of_game.index.astype(str)
+
+time_of_game_chart = figure(plot_width=900, plot_height=500, tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+                            x_axis_label="Minute of the game", toolbar_location="right", title=f"Each and Every Minute", y_range=(60, 85), x_range = (list(time_of_game.index)))
+
+time_of_game_special = time_of_game.iloc[0:-1:12, :].copy()
+time_of_game_ns = time_of_game.drop(index=[str(i) for i in range(0,len(time_of_game.index),12)])
+
+time_of_game_src = ColumnDataSource(data={'percent': time_of_game_ns['percent'], 'y': time_of_game_ns['percent'], 'x': time_of_game_ns.index, 'attempts': time_of_game_ns['attempts'], })
+time_of_game_special_src = ColumnDataSource(data={'percent': time_of_game_special['percent'], 'y': time_of_game_special['percent'], 'x': time_of_game_special.index, 'attempts': time_of_game_special['attempts'], })
+
+time_of_game_chart.vbar('x', top='y', bottom=0, source=time_of_game_src, width=0.6, alpha=0.65, fill_color='blue', line_color='blue', line_width=2, name='away')
+time_of_game_chart.vbar('x', top='y', bottom=0, source=time_of_game_special_src, width=0.6, alpha=0.65, fill_color='orangered', line_color='orangered', line_width=2, name='special')
+
+time_of_game_chart.add_tools(HoverTool(mode='vline', tooltips=[("Minute", "@x"), ("Percentage (%)", "@percent{(0.0)}"), ("Attempts", "@attempts{(0,0)}"), ], ))
+# time_of_game_chart.xaxis.ticker.desired_num_ticks = len(time_of_game.index)
+time_of_game_chart.yaxis.ticker.desired_num_ticks = 10
+time_of_game_chart.xgrid.visible = False
+time_of_game_chart.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
+
+# ----------------------------------------
+for plot in [best_shooter_chart, worst_shooter_chart, salary_scatter, score_dif_chart, position_matters_bar, home_away_bar, period_chart, time_of_game_chart]:
+    plot.outline_line_width = 3
+    plot.outline_line_alpha = 0.3
+    plot.axis.minor_tick_line_alpha = 0
+    plot.axis.major_tick_line_color = 'black'
+    plot.axis.major_tick_in = -1
+    plot.yaxis.major_label_text_font_style = 'bold'
+    plot.xaxis.major_label_text_font_style = 'bold'
+    plot.yaxis.major_label_text_font = "Arial"
+    plot.xaxis.major_label_text_font = "Arial"
+    plot.title.align = 'center'
+    plot.title.text_font_size = '12pt'
+    plot.xaxis.axis_line_width = 0
+    plot.yaxis.axis_line_width = 0
+    plot.yaxis.axis_label_text_font_style = "bold"
+    plot.xaxis.axis_label_text_font_style = "bold"
+    plot.toolbar.active_scroll = "auto"
+    plot.toolbar.autohide = True
+    plot.yaxis.axis_label_text_font_size = "10pt"
+    plot.xaxis.axis_label_text_font_size = "10pt"
+    plot.xaxis.major_label_text_font_size = "10pt"
+    plot.yaxis.major_label_text_font_size = "10pt"
+
+tab1 = Panel(child=row([slider, best_shooter_chart]), title="Best Shooters")
+tab2 = Panel(child=row([slider, worst_shooter_chart]), title="Worst Shooters")
+tab3 = Panel(child=row([slider, salary_scatter]), title="Salary vs Efficiency")
+tab4 = Panel(child=row([select_absolute, score_dif_chart]), title="Score Difference")
+tab5 = Panel(child=row([select_metric_home_away,home_away_bar]), title="Home vs Away")
+tab6 = Panel(child=row([select_metric_position, position_matters_bar]), title="Position Matters")
+tab7 = Panel(child=row([select_metric_period, period_chart]), title="Quarters")
+tab8 = Panel(child=row([select_metric_minute, time_of_game_chart]), title="Each Minute")
+tt = Tabs(tabs=[tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8])
+dashboard = column([tt])
+curdoc().add_root(dashboard)
+show(dashboard)
+print(datetime.datetime.now(), datetime.datetime.now()-timee)
 
