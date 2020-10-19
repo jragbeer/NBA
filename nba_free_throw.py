@@ -7,20 +7,24 @@ import time
 import pickle
 from pprint import pprint
 import pyarrow
-from bokeh.models import BasicTickFormatter, HoverTool, BoxSelectTool, BoxZoomTool, ResetTool, Span, Label, Button, DatePicker, CustomJS
-from bokeh.models import NumeralTickFormatter, WheelZoomTool, PanTool, SaveTool, ColumnDataSource, LinearAxis, Range1d, FactorRange
-from bokeh.models.widgets import Select, inputs, Slider, CheckboxGroup, Toggle, Div
+from bokeh.models import BasicTickFormatter, HoverTool, BoxSelectTool, BoxZoomTool, ResetTool, Span, Label, Button, DatePicker, CustomJS, Panel, RangeSlider
+from bokeh.models import NumeralTickFormatter, WheelZoomTool, PanTool, SaveTool, ColumnDataSource, LinearAxis, Range1d, FactorRange,BoxAnnotation, Tabs
+from bokeh.models.widgets import Select, RadioGroup, DataTable, StringFormatter, TableColumn, NumberFormatter, Div, inputs, Slider, CheckboxGroup, Toggle
 from bokeh.layouts import widgetbox, row, column, gridplot, layout
+from bokeh.io import curdoc
+from bokeh.events import ButtonClick, SelectionGeometry
+from dateutil import parser
+from bokeh.palettes import brewer
+import colorcet as cc
 from sqlalchemy import create_engine
 import pymysql
-from bokeh.io import curdoc
 from pytz import timezone
 from bokeh.transform import cumsum
 from bokeh.plotting import figure, show
 import sqlite3
 import pymongo
 import os
-import colorcet as cc
+
 
 palette = cc.fire[16:253]
 
@@ -212,7 +216,7 @@ collection = db['basic_game_info']
 data_2016.update(data_2020)
 # all game_id's in a list
 all_games = [item.split('gameId=')[1] for sublist in NestedDictValues(data_2016) for item in sublist]
-
+print(1, datetime.datetime.now()-timee)
 def get_gameid_player_mapping():
     """
 
@@ -549,9 +553,7 @@ def make_home_away_charts(data):
     #                                           'AWAY - {:.1f}%'.format(100 * away_shots / (home_shots + away_shots))],
     #         startangle=90, labeldistance=0.35, textprops={'fontsize': 18, 'color': 'white', 'weight': 'bold'})
     # plt.show()
-
-
-def score_thing(data):
+def salary_AND_best_worst(data):
     score_before = []
     for x in data.itertuples():
         if x.shot_made == 0: # if shot was missed, just look at the score
@@ -577,11 +579,12 @@ def score_thing(data):
     score_dif = score_dif[score_dif.index >= -40]
     score_dif = score_dif[score_dif.index <= 40]
 
-    p = figure(plot_width=1100, plot_height=750, y_range = (60, 85),
+    pp = figure(plot_width=1100, plot_height=500, y_range = (60, 85),
                tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
                x_axis_label="Difference in Score", y_axis_label="Percentage (%)", toolbar_location="right", title=f"HOME COURT ADVANTAGE")
     src = ColumnDataSource({'x': list(score_dif.index), 'y':score_dif['percent'].tolist(), 'bottom' : [0 for _ in range(len(score_dif.index))]})
-    p.vbar('x', top='y',bottom='bottom', source=src, width = 0.6)
+    pp.vbar('x', top='y',bottom='bottom', source=src, width = 0.6, color='blue', line_color='blue', alpha=0.65,)
+    pp.add_tools(HoverTool(tooltips=[("Difference in Score", "@x"),("Percentage (%)", "@y{(0.0)}"),],))
 
     score_dif_abs = pd.DataFrame(data.groupby(['Score_Difference_abs'])['shot_made'].sum())
     score_dif_abs['count'] = data.groupby(['Score_Difference_abs'])['shot_made'].count()
@@ -589,255 +592,331 @@ def score_thing(data):
     score_dif_abs = score_dif_abs[score_dif_abs.index >= -40]
     score_dif_abs = score_dif_abs[score_dif_abs.index <= 40]
 
-    w = figure(plot_width=1100, plot_height=750, y_range = (60, 85),
+    ww = figure(plot_width=1100, plot_height=500, y_range = (60, 85),
                tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
                x_axis_label="Difference in Score (abs)", y_axis_label="Percentage (%)", toolbar_location="right", title=f"HOME COURT ADVANTAGE")
     abs_src = ColumnDataSource({'x': list(score_dif_abs.index), 'y':score_dif_abs['percent'].tolist(), 'bottom' : [0 for _ in range(len(score_dif_abs.index))]})
-    w.vbar('x', top='y',bottom='bottom', source=abs_src, width = 0.6)
-    show(row([p,w]))
+    ww.vbar('x', top='y',bottom='bottom', source=abs_src, width = 0.6, color='blue', line_color='blue', alpha=0.65,)
+    ww.add_tools(HoverTool(tooltips=[("Difference in Score", "@x"),("Percentage (%)", "@y{(0.0)}"),],))
+
+    # ----------------------------------------
+
+    salaries = pd.read_csv(path + 'salary data/playersalaries.csv')
+    salaries['Player'] = salaries['Player'].str.lower()
+    salaries['Player'] = pd.Series([x.replace('.', '').replace("'", '') for x in salaries.Player], index=salaries.index)
+
+    new = pd.DataFrame(data.groupby(['player']).agg({'shot_made':'sum'}))
+    new['attempts'] = data.groupby(['player']).agg({'shot_made': 'count'})
+    new['percent'] = 100*new['shot_made']/new['attempts']
+    new['salary'] = salaries.groupby(['Player'])['AdjustedSalary'].mean()
+    new['salary'].fillna(80000, inplace=True)
+    new['salary'] = new['salary'].astype('int64')
+    new = new[new['attempts']>30]
+    new.index = [' '.join([x.split(' ')[0].capitalize(),x.split(' ')[1].capitalize()]) for x in new.index]
+
+
+    def update_slider(attr, old, new):
+        pass
+
+    slider = Slider(start=30, end=new['attempts'].max(), step=100, value=30, title="Minimum Attempts", width = 200)
+    slider.on_change('value', update_slider)
+
+
+    best_shooters = new.sort_values(by = 'percent', ascending=False).head(12)
+    best_names = list(best_shooters.index)
+    best_names.reverse()
+
+    worst_shooters = new.sort_values(by = 'percent').head(10)
+    worst_names = list(worst_shooters.index)
+    p = figure(plot_width=600, plot_height=500, y_range = worst_names,
+               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+               x_axis_label="Percentage (%)", toolbar_location="right", title=f"Worst Shooters in NBA History")
+    worst_source = ColumnDataSource(data = {'right': worst_shooters['percent'], 'y': worst_names, 'attempts':worst_shooters['attempts']})
+    p.hbar('y', right='right', source = worst_source,  height=0.6, alpha=0.65,  fill_color='blue', line_color = 'blue', line_width = 2, name = 'away')
+    p.add_tools(HoverTool(tooltips=[("Player", "@y"),("Percentage (%)", "@right{(0.0)}"),("Attempts", "@attempts{(0,0)}"),],))
+
+    w = figure(plot_width=600, plot_height=500, y_range = best_names,
+               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+               x_axis_label="Percentage (%)", toolbar_location="right", title=f"Best Shooters in NBA History")
+    best_source = ColumnDataSource(data = {'right': best_shooters['percent'].sort_values(), 'y': best_names, 'attempts':best_shooters.sort_values('percent')['attempts']})
+    w.hbar('y', right='right', source = best_source,  height=0.6, alpha=0.65,  fill_color='orangered', line_color = 'orangered', line_width = 2, name = 'away')
+    w.add_tools(HoverTool(tooltips=[("Player", "@y"),("Percentage (%)", "@right{(0.0)}"),("Attempts", "@attempts{(0,0)}")],))
+
+    # ----------------------------------------
+
+    z = figure(plot_width=900, plot_height=500,
+               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+               y_axis_label="Percentage (%)", toolbar_location="right", title=f"Mean Salaries vs Career FT% in the NBA")
+    scatter_src = ColumnDataSource(data = {'x': new['salary'], 'y': new['percent'], 'player':new.index})
+    z.circle('x', 'y', source=scatter_src,  alpha=0.65,  fill_color='orangered', line_color = 'blue', line_width = 2, name = 'away')
+    z.add_tools(HoverTool(tooltips=[("Player", "@player"),("Salary", "@x{(0,0)}"),("Percentage (%)", "@y")],))
+    z.xaxis[0].formatter = NumeralTickFormatter(format="$0.00 a")
+    # ----------------------------------------
+    def get_season_stats():
+        try:
+            season_stats = pd.read_parquet(data_path + 'season_stats_cleaned.parquet')
+        except:
+            season_stats = pd.read_csv("Seasons_Stats.csv")
+            season_stats['Pos'].replace('C-F', "C-PF", inplace = True)
+            season_stats['Pos'].replace('C-SF', "PF", inplace=True)
+            season_stats['Pos'].replace('F', "SF", inplace=True)
+            season_stats['Pos'].replace('F-C', "PF", inplace=True)
+            season_stats['Pos'].replace('G', "SG", inplace=True)
+            season_stats['Pos'].replace('PF-C', "C-PF", inplace=True)
+            season_stats['Pos'].replace('F-G', "PF-SF", inplace=True)
+            season_stats['Pos'].replace('G-F', "PF-SF", inplace=True)
+            season_stats['Pos'].replace('SF-PF', "PF-SF", inplace=True)
+            season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
+            season_stats['Pos'].replace('PG-SF', "SG", inplace=True)
+            season_stats['Pos'].replace('SG-SF', "SF-SG", inplace=True)
+            season_stats['Pos'].replace('PG-SG', "SG-PG", inplace=True)
+            season_stats['Pos'].replace('SF-PG', "SG", inplace=True)
+            season_stats['Pos'].replace('SG-PF', "SF", inplace=True)
+        return season_stats
+    def make_source(df, metric = 'percent'):
+        return ColumnDataSource(data = {'x': df.index, 'y': df[metric], 'percent': df['percent'], 'made': df['shot_made'], 'attempts': df['count']})
+    def update_metric(attr, old, new):
+        if new == 'Percentage':
+            src.data = dict(make_source(groupby_position,).data)
+            p.yaxis.axis_label = 'Percentage (%)'
+        elif new == 'Attempts':
+            src.data = dict(make_source(groupby_position,'count').data)
+            p.yaxis.axis_label = 'Shots'
+        elif new == "Shots Made":
+            src.data = dict(make_source(groupby_position,'shot_made').data)
+            p.yaxis.axis_label = 'Shots'
+
+    season_stats = get_season_stats()
+    # find how many times player played at each position
+    tmp = season_stats.groupby(['Player', 'Pos']).agg({'Pos':'count'}).unstack()
+    # find how max of each player's position, put that as player's position
+    positions = pd.DataFrame(tmp.idxmax(axis=1), columns=['pos'])
+    positions['position'] = [x[1] for x in positions['pos']]
+    positions.index = [x.lower().replace('*', '') for x in positions.index]
+    positions['player'] = positions.index
+    positions = clean_player2(positions)
+    positions.index = positions['player']
+    positions.drop(['pos', 'player'], 1, inplace=True)
+
+    data['player'] = data['player'].str.lower() # lower names so join works
+    full_data = pd.merge(data, positions, how = 'inner', right_index=True, left_on = 'player')
+    # find simple stats for each position
+    groupby_position = pd.DataFrame(full_data.groupby(['position'])['shot_made'].sum())
+    groupby_position['count'] = full_data.groupby(['position'])['shot_made'].count()
+    groupby_position['percent'] = 100 * groupby_position['shot_made'] / groupby_position['count']
+    groupby_position = groupby_position.sort_values("percent", ascending=False)
+    src = make_source(groupby_position)
+
+    select_metric = Select(title='Metric', value=f"Percentage", options=['Percentage', "Attempts", "Shots Made"], width=175)
+    select_metric.on_change('value', update_metric)
+
+    zz = figure(plot_width=600, plot_height=500, x_range=list(groupby_position.index),
+               tools=[BoxSelectTool(), BoxZoomTool(), ResetTool(), WheelZoomTool(), SaveTool(), PanTool()],
+               x_axis_label="Position", y_axis_label="Percentage (%)", toolbar_location="right", title=f"Free Throw Stats by Position")
+    zz.vbar('x', top='y', source=src, width=0.6, alpha=0.75, name='bars', fill_color='orangered', line_color = 'black', line_width = 2)
+    zz.add_tools(HoverTool(mode='vline', tooltips=[("Position", "@x"), ("Percentage (%)", "@percent{(0.0)}"),("Attempts", "@attempts{(0,0)}"), ("Shots Made", "@made{(0,0)}"),],))
+
+    # ----------------------------------------
+    p.ygrid.visible = False
+    w.ygrid.visible = False
+    z.xaxis.major_label_orientation = np.pi / 4
+
+    for plot in [pp, ww]:
+        plot.yaxis.ticker.desired_num_ticks=10
+    for plot in [p, w, z,]:
+        plot.x_range.start = 0
+        plot.xaxis.ticker.desired_num_ticks=len(data['season'].unique())
+    for plot in [p, w, z, pp, ww, zz]:
+        plot.outline_line_width = 3
+        plot.outline_line_alpha = 0.3
+        plot.axis.minor_tick_line_alpha = 0
+        plot.axis.major_tick_line_color = 'black'
+        plot.axis.major_tick_in = -1
+        plot.yaxis.major_label_text_font_style = 'bold'
+        plot.xaxis.major_label_text_font_style = 'bold'
+        plot.yaxis.major_label_text_font = "Arial"
+        plot.xaxis.major_label_text_font = "Arial"
+        plot.title.align = 'center'
+        plot.title.text_font_size = '12pt'
+        plot.xaxis.axis_line_width = 0
+        plot.yaxis.axis_line_width = 0
+        plot.yaxis.axis_label_text_font_style = "bold"
+        plot.xaxis.axis_label_text_font_style = "bold"
+        plot.toolbar.active_scroll = "auto"
+        plot.toolbar.autohide = True
+
+        plot.yaxis.axis_label_text_font_size = "10pt"
+        plot.xaxis.axis_label_text_font_size = "10pt"
+        plot.xaxis.major_label_text_font_size = "10pt"
+        plot.yaxis.major_label_text_font_size = "10pt"
+        # plot.legend.location = "top_left"
+        # plot.legend.click_policy = "hide"
+
+    tab1 = Panel(child=row([slider, w]), title="Best Shooters")
+    tab2 = Panel(child=row([slider, p]), title="Worst Shooters")
+    tab3 = Panel(child=column([z]), title="Salary Scatterplot")
+    tab4 = Panel(child=column([pp]), title="Percentage across Score Difference")
+    tab5 = Panel(child=column([ww]), title="Percentage across Absolute Score Difference")
+    tab6 = Panel(child=row([select_metric, zz]), title="Position Matters")
+    tt = Tabs(tabs=[tab1, tab2, tab3, tab4, tab5, tab6])
+    dashboard = column([tt])
+    curdoc().add_root(dashboard)
+    show(dashboard)
 
 
 # df = consolidate_to_single_df()
 
-
 pickle_in = open(path + "data.pickle","rb")
 df = pickle.load(pickle_in)
-# make_home_away_charts(df)
-# position_matters(df)
-score_thing(df)
+print(2, datetime.datetime.now()-timee)
+salary_AND_best_worst(df)
+make_home_away_charts(df)
+improving_ft(df)
 print()
-# def make_map(data):
-#     # state_data = pd.DataFrame(data.groupby(['State'])['shot_made'].sum())
-#     # bb = data.groupby(['State'])['shot_made'].count()
-#     #
-#     # state_data['count'] = bb
-#     # state_data['percent'] = state_data['shot_made'] / state_data['count']
-#     # print(state_data.sort_values('percent'))
-#
-#     city_data = pd.DataFrame(data.groupby(['City'])['shot_made'].sum())
-#     city_data['count'] = data.groupby(['City'])['shot_made'].count()
-#     city_data['percent'] = city_data['shot_made'] / city_data['count']
-#
-#     lat_ = []
-#     lon_ = []
-#     for x in city_data.itertuples():
-#         for y in teamNames.itertuples():
-#             if x.Index == y.City:
-#                 lat_.append(y.Lat)
-#                 lon_.append(y.Lon)
-#                 break
-#     city_data['lat'] = lat_
-#     city_data['lon'] = lon_
-#
-#     top = np.array([city_data.at['Portland', 'percent'], city_data.at['Seattle', 'percent']])
-#     midtop = np.array([city_data.at['San Fransisco', 'percent'], city_data.at['Denver', 'percent'],
-#                        city_data.at['Sacramento', 'percent'], city_data.at['Indianapolis', 'percent'],
-#                        city_data.at['Washington', 'percent'], city_data.at['Philadelphia', 'percent'],
-#                        city_data.at['Salt Lake City', 'percent'], city_data.at['Jersey City', 'percent'],
-#                        city_data.at['Brooklyn', 'percent'], city_data.at['New York', 'percent'],
-#                        city_data.at['Toronto', 'percent'], city_data.at['Detroit', 'percent'], city_data.at['Boston', 'percent'],
-#                        city_data.at['Chicago', 'percent'], city_data.at['Cleveland', 'percent'],
-#                        city_data.at['Milwaukee', 'percent'], city_data.at['Minneapolis', 'percent']])
-#     midlow = np.array([city_data.at['Phoenix', 'percent'], city_data.at['Charlotte', 'percent'],
-#                        city_data.at['Atlanta', 'percent'], city_data.at['Oklahoma City', 'percent'],
-#                        city_data.at['Memphis', 'percent'], city_data.at['Los Angeles', 'percent']])
-#     bottom = np.array([city_data.at['Houston', 'percent'], city_data.at['Miami', 'percent'],
-#                        city_data.at['Orlando', 'percent'], city_data.at['New Orleans', 'percent'],
-#                        city_data.at['Dallas', 'percent'], city_data.at['San Antonio', 'percent']])
-#
-#     pacific = np.array([city_data.at['Seattle', 'percent'],city_data.at['Portland', 'percent'],
-#                         city_data.at['Los Angeles', 'percent'],
-#                         city_data.at['Sacramento', 'percent'],city_data.at['San Fransisco', 'percent'],])
-#     mountain = np.array([city_data.at['Salt Lake City', 'percent'],city_data.at['Phoenix', 'percent'],city_data.at['Denver', 'percent'],])
-#     central = np.array([city_data.at['Minneapolis', 'percent'],city_data.at['Memphis', 'percent'],
-#                         city_data.at['Milwaukee', 'percent'],city_data.at['Chicago', 'percent'],
-#                         city_data.at['San Antonio', 'percent'],city_data.at['Oklahoma City', 'percent'],
-#                         city_data.at['Houston', 'percent'],city_data.at['New Orleans', 'percent'],city_data.at['Dallas', 'percent']])
-#     eastern = np.array([city_data.at['Toronto', 'percent'],city_data.at['Indianapolis', 'percent'],city_data.at['Washington', 'percent'],
-#                         city_data.at['Boston', 'percent'],city_data.at['Philadelphia', 'percent'],city_data.at['Charlotte', 'percent'],
-#                         city_data.at['New York', 'percent'],city_data.at['Brooklyn', 'percent'],city_data.at['Atlanta', 'percent'],
-#                         city_data.at['Jersey City', 'percent'],city_data.at['Cleveland', 'percent'],city_data.at['Orlando', 'percent'],
-#                         city_data.at['Detroit', 'percent'], city_data.at['Miami', 'percent']])
-#
-#
-#
-#
-#     fig = plt.figure()
-#     m = Basemap(projection='lcc', resolution='l',
-#                 lat_0=39.8333333, lon_0=-98.585522,
-#                 width=5E6, height=3E6)
-#     m.shadedrelief()
-#     m.drawcoastlines(color='gray')
-#     m.drawcountries(color='gray')
-#     m.drawstates(color='gray')
-#     m.scatter(city_data['lon'].values, city_data['lat'].values, latlon=True,
-#               c=city_data['percent'],s=250,alpha = 0.8, cmap = 'YlOrRd')
-#     plt.colorbar(label=r'Percentage (%)')
-#     plt.tick_params(axis='y', labelsize=20)
-#
-#     fig2 = plt.figure()
-#     m2 = Basemap(projection='lcc', resolution='l',
-#                 lat_0=39.8333333, lon_0=-98.585522,
-#                 width=5E6, height=3E6)
-#     m2.shadedrelief()
-#     m2.drawcoastlines(color='gray')
-#     m2.drawcountries(color='gray')
-#     m2.drawstates(color='gray')
-#     plt.fill_between([0, 5000000], [3000000 * 0.75, 3000000 * 0.75], [3000000, 3000000], facecolor='blue', alpha=0.2,
-#                      label='{:.1f}%'.format(100 * top.mean()))
-#     plt.fill_between([0, 5000000], [3000000 / 2, 3000000 / 2], [3000000 * 0.75, 3000000 * 0.75], facecolor='yellow',
-#                      alpha=0.2, label='{:.1f}%'.format(100 * midtop.mean()))
-#     plt.fill_between([0, 5000000], [3000000 / 4, 3000000 / 4], [3000000 / 2, 3000000 / 2], facecolor='red', alpha=0.2,
-#                      label='{:.1f}%'.format(100 * midlow.mean()))
-#
-#     plt.fill_between([0,5000000], [3000000/4,3000000/4],facecolor='green', alpha = 0.2, label = '{:.1f}%'.format(100*bottom.mean()))
-#     m2.scatter(city_data['lon'].values, city_data['lat'].values, latlon=True, c='black', s=60)
-#     plt.legend(loc = 'lower left')
-#
-#     fig3 = plt.figure()
-#     m3 = Basemap(projection='lcc', resolution='l',
-#                 lat_0=39.8333333, lon_0=-98.585522,
-#                 width=5E6, height=3E6)
-#     m3.shadedrelief()
-#     m3.drawcoastlines(color='gray')
-#     m3.drawcountries(color='gray')
-#     m3.drawstates(color='gray')
-#     plt.fill_between([0, (5000000/4)-50000],[0,0],[3000000,3000000], facecolor='blue', alpha=0.2,
-#                      label='Pacific: {:.1f}%'.format(100 * pacific.mean()))
-#     plt.fill_between([(5000000/4)-50000, (5000000/2)-50000],[0,0],[3000000,3000000], facecolor='yellow',
-#                      alpha=0.2, label='Mountain: {:.1f}%'.format(100 * mountain.mean()))
-#     plt.fill_between([(5000000/2)-50000, (5000000*0.75)-250000],[0,0],[3000000,3000000], facecolor='red', alpha=0.2,
-#                      label='Central: {:.1f}%'.format(100 * central.mean()))
-#     plt.fill_between([(5000000*0.75)-250000,5000000],[0,0],[3000000,3000000],facecolor='green', alpha = 0.2, label = 'Eastern: {:.1f}%'.format(100*eastern.mean()))
-#
-#     m3.scatter(city_data['lon'].values, city_data['lat'].values, latlon=True, c='black', s=60)
-#     plt.legend(loc = 'lower left')
-# # make_map(df)
-# def salary_AND_best_worst(data):
-#     salaries = pd.read_csv(path + 'salary data/playersalaries.csv')
-#     salaries['Player'] = salaries['Player'].str.lower()
-#     salaries['Player'] = pd.Series([x.replace('.', '').replace("'", '') for x in salaries.Player], index=salaries.index)
-#
-#     new = pd.DataFrame(data.groupby(['player']).agg({'shot_made':'sum'}))
-#     new['attempts'] = data.groupby(['player']).agg({'shot_made': 'count'})
-#     new['percent'] = new['shot_made']/new['attempts']
-#     new['salary'] = salaries.groupby(['Player'])['AdjustedSalary'].mean()
-#     new['salary'].fillna(80000, inplace=True)
-#     new['salary'] = new['salary'].astype('int64')
-#     new = new[new['attempts']>30]
-#
-#     worst_shooters = new.sort_values(by = 'percent').head(10)
-#     fig1 = plt.figure()
-#     ax1 = fig1.add_subplot(111)
-#     ax1.barh([' '.join([x.split(' ')[0].capitalize(),x.split(' ')[1].capitalize()]) for x in worst_shooters.index], worst_shooters['percent'].values*100, color= '#f4ce42')
-#     ax1.set(xlabel = 'Percentage (%)', ylabel = 'Player', xlim = [25, 50])
-#     ax1.tick_params(axis='y', labelsize=15)
-#     ax1.tick_params(axis='x', labelsize=14)
-#     style = dict(size=18, color='darkgray')
-#     for x in range(len(worst_shooters.index)):
-#         ax1.text(100*worst_shooters['percent'][x]+1,x, 'Attempts: {}'.format(str(worst_shooters['attempts'][x])), **style)
-#
-#     best_shooters = new.sort_values(by = 'percent', ascending=False).head(12)
-#     fig2 = plt.figure()
-#     ax2 = fig2.add_subplot(111)
-#     ax2.barh(np.flip([' '.join([x.split(' ')[0].capitalize(),x.split(' ')[1].capitalize()]) for x in best_shooters.index]), np.flip(best_shooters['percent'].values)*100, color= '#f4ce42')
-#     ax2.set(xlabel = 'Percentage (%)', ylabel = 'Player', xlim = [85, 100])
-#     ax2.tick_params(axis='y', labelsize=15)
-#     ax2.tick_params(axis='x', labelsize=14)
-#     for x in range(len(best_shooters.index)):
-#         ax2.text(100*np.flip(best_shooters['percent'].values)[x]+1,x, 'Attempts: {}'.format(str(np.flip(best_shooters['attempts'].values)[x])), **style)
-#
-#     fig = plt.figure()
-#     ax0 = fig.add_subplot(121)
-#     ax02 = fig.add_subplot(122)
-#     ax0.set(xlabel=r'Salary', ylabel='Percentage (%)', )
-#     ax02.set(xlabel = r'$\log_{10}({\rm Salary})$', )
-#     ax02.yaxis.set_ticks_position('none')
-#     ax02.scatter(np.log10(new['salary'].values), new['percent'].values,  c = 'red', s = 10, alpha = 0.32)
-#     ax0.scatter(new['salary'].values, new['percent'].values,  c = 'red', s = 10, alpha = 0.32)
-# salary_AND_best_worst(df)
-# def score_thing(data):
-#     score_before = []
-#     for x in data.itertuples():
-#         if x.shot_made == 0:
-#             score_before.append(x.score_after)
-#         else:
-#             cc = x.score_after
-#             first_num = int(cc.split(' - ')[0])
-#             second_num = int(cc.split(' - ')[1])
-#             if x.Players_team == 'away':
-#                 first_num-=1
-#                 score_before.append('{} - {}'.format(first_num, second_num))
-#             else:
-#                 second_num-=1
-#                 score_before.append('{} - {}'.format(first_num, second_num))
-#
-#     data['score_before'] = pd.Series(score_before, index = data.index)
-#     data['Score_Difference_abs'] = pd.Series([np.abs(int(x.split('-')[0])-int(x.split('-')[1])) for x in data["score_before"]], index = data.index)
-#     data['Score_Difference'] = pd.Series(
-#         [int(x.split('-')[0]) - int(x.split('-')[1]) for x in data["score_before"]], index=data.index)
-#
-#     score_dif = pd.DataFrame(data.groupby(['Score_Difference'])['shot_made'].sum())
-#     score_dif['count'] =data.groupby(['Score_Difference'])['shot_made'].count()
-#     score_dif['percent'] = 100*score_dif['shot_made']/score_dif['count']
-#     score_dif = score_dif[score_dif.index >= -40]
-#     score_dif = score_dif[score_dif.index <= 40]
-#     fig = plt.figure()
-#     ax1= fig.add_subplot(111)
-#     ax1.set(ylim = [60, 85], ylabel = 'Percentage (%)', xlabel = 'Difference in Score')
-#     ax1.tick_params(axis = 'y', labelsize = 18)
-#     ax1.tick_params(axis='x', labelsize=15)
-#     ax1.bar(score_dif.index, score_dif.percent.values)
-#
-#     score_dif_abs = pd.DataFrame(data.groupby(['Score_Difference_abs'])['shot_made'].sum())
-#     score_dif_abs['count'] =data.groupby(['Score_Difference_abs'])['shot_made'].count()
-#     score_dif_abs['percent'] = 100*score_dif_abs['shot_made']/score_dif_abs['count']
-#     score_dif_abs = score_dif_abs[score_dif_abs.index >= -40]
-#     score_dif_abs = score_dif_abs[score_dif_abs.index <= 40]
-#     fig2 = plt.figure()
-#     ax2= fig2.add_subplot(111)
-#     ax2.set(ylim = [60, 85], ylabel = 'Percentage (%)',xlabel = 'Difference in Score (abs)')
-#     ax2.tick_params(axis='y', labelsize=18)
-#     ax2.tick_params(axis='x', labelsize=15)
-#     ax2.bar(score_dif_abs.index, score_dif_abs.percent.values)
-# score_thing(df)
-# def time_charts(data):
-#     period_df = pd.DataFrame(data.groupby(['period'])['shot_made'].sum())
-#     period_df['count'] =data.groupby(['period'])['shot_made'].count()
-#     period_df['percent'] = 100*period_df['shot_made']/period_df['count']
-#
-#     fig1 = plt.figure()
-#     ax1 = fig1.add_subplot(111)
-#     ax1.bar(period_df.index, period_df.percent)
-#     ax1.set(ylim = [60, 85], ylabel = 'Percentage (%)', xlabel = 'Period', xticklabels =  ['','Q1','Q2','Q3','Q4','OT','2OT','3OT','4OT',])
-#     ax1.plot([period_df.index.min(), period_df.index.max()], [period_df.percent.min(),period_df.percent.max()], c = 'orange', linewidth = 6,linestyle='--')
-#     ax1.tick_params(axis='both',which = 'both', labelsize=16)
-#     t_o_g = []
-#     for x in df.itertuples():
-#         p = int(x.time.split(':')[0])
-#         if x.period == float(1):
-#             p = p + 36
-#         elif x.period == float(2):
-#             p = p+24
-#         elif x.period == float(3):
-#             p = p+12
-#         else:
-#             p = p
-#         t_o_g.append('{}'.format(p))
-#     df['time_of_game'] = pd.Series(t_o_g, index = df.index)
-#     time_of_game = pd.DataFrame(df.groupby(['time_of_game'])['shot_made'].sum())
-#     time_of_game['attempts'] = df.groupby(['time_of_game'])['shot_made'].count()
-#     time_of_game['percent'] = 100* time_of_game['shot_made'] / time_of_game['attempts']
-#     time_of_game.index = time_of_game.index.astype(int)
-#
-#     fig2 = plt.figure()
-#     ax2 = fig2.add_subplot(111)
-#     ax2.bar(time_of_game.sort_index(ascending = False).index, time_of_game.sort_index()['percent'].values)
-#     ax2.bar([0, 12, 24, 36], [time_of_game.sort_index(ascending = False)['percent'].values[y] for y in [0, 12, 24, 36]])
-#     ax2.tick_params(axis = 'x', which = 'both', labelsize=12)
-#     ax2.set(ylim= [60,85],xticks= [x for x in range(48)],xticklabels = [x for x in range(48)][::1],ylabel = 'Percentage (%)', xlabel = 'Minute of Game ')
-#     ax2.tick_params(axis='y', labelsize=16)
-# time_charts(df)
-# improving_ft(df)
+def make_map(data):
+    # state_data = pd.DataFrame(data.groupby(['State'])['shot_made'].sum())
+    # bb = data.groupby(['State'])['shot_made'].count()
+    #
+    # state_data['count'] = bb
+    # state_data['percent'] = state_data['shot_made'] / state_data['count']
+    # print(state_data.sort_values('percent'))
+
+    city_data = pd.DataFrame(data.groupby(['City'])['shot_made'].sum())
+    city_data['count'] = data.groupby(['City'])['shot_made'].count()
+    city_data['percent'] = city_data['shot_made'] / city_data['count']
+
+    lat_ = []
+    lon_ = []
+    for x in city_data.itertuples():
+        for y in teamNames.itertuples():
+            if x.Index == y.City:
+                lat_.append(y.Lat)
+                lon_.append(y.Lon)
+                break
+    city_data['lat'] = lat_
+    city_data['lon'] = lon_
+
+    top = np.array([city_data.at['Portland', 'percent'], city_data.at['Seattle', 'percent']])
+    midtop = np.array([city_data.at['San Fransisco', 'percent'], city_data.at['Denver', 'percent'],
+                       city_data.at['Sacramento', 'percent'], city_data.at['Indianapolis', 'percent'],
+                       city_data.at['Washington', 'percent'], city_data.at['Philadelphia', 'percent'],
+                       city_data.at['Salt Lake City', 'percent'], city_data.at['Jersey City', 'percent'],
+                       city_data.at['Brooklyn', 'percent'], city_data.at['New York', 'percent'],
+                       city_data.at['Toronto', 'percent'], city_data.at['Detroit', 'percent'], city_data.at['Boston', 'percent'],
+                       city_data.at['Chicago', 'percent'], city_data.at['Cleveland', 'percent'],
+                       city_data.at['Milwaukee', 'percent'], city_data.at['Minneapolis', 'percent']])
+    midlow = np.array([city_data.at['Phoenix', 'percent'], city_data.at['Charlotte', 'percent'],
+                       city_data.at['Atlanta', 'percent'], city_data.at['Oklahoma City', 'percent'],
+                       city_data.at['Memphis', 'percent'], city_data.at['Los Angeles', 'percent']])
+    bottom = np.array([city_data.at['Houston', 'percent'], city_data.at['Miami', 'percent'],
+                       city_data.at['Orlando', 'percent'], city_data.at['New Orleans', 'percent'],
+                       city_data.at['Dallas', 'percent'], city_data.at['San Antonio', 'percent']])
+
+    pacific = np.array([city_data.at['Seattle', 'percent'],city_data.at['Portland', 'percent'],
+                        city_data.at['Los Angeles', 'percent'],
+                        city_data.at['Sacramento', 'percent'],city_data.at['San Fransisco', 'percent'],])
+    mountain = np.array([city_data.at['Salt Lake City', 'percent'],city_data.at['Phoenix', 'percent'],city_data.at['Denver', 'percent'],])
+    central = np.array([city_data.at['Minneapolis', 'percent'],city_data.at['Memphis', 'percent'],
+                        city_data.at['Milwaukee', 'percent'],city_data.at['Chicago', 'percent'],
+                        city_data.at['San Antonio', 'percent'],city_data.at['Oklahoma City', 'percent'],
+                        city_data.at['Houston', 'percent'],city_data.at['New Orleans', 'percent'],city_data.at['Dallas', 'percent']])
+    eastern = np.array([city_data.at['Toronto', 'percent'],city_data.at['Indianapolis', 'percent'],city_data.at['Washington', 'percent'],
+                        city_data.at['Boston', 'percent'],city_data.at['Philadelphia', 'percent'],city_data.at['Charlotte', 'percent'],
+                        city_data.at['New York', 'percent'],city_data.at['Brooklyn', 'percent'],city_data.at['Atlanta', 'percent'],
+                        city_data.at['Jersey City', 'percent'],city_data.at['Cleveland', 'percent'],city_data.at['Orlando', 'percent'],
+                        city_data.at['Detroit', 'percent'], city_data.at['Miami', 'percent']])
+
+
+
+
+    fig = plt.figure()
+    m = Basemap(projection='lcc', resolution='l',
+                lat_0=39.8333333, lon_0=-98.585522,
+                width=5E6, height=3E6)
+    m.shadedrelief()
+    m.drawcoastlines(color='gray')
+    m.drawcountries(color='gray')
+    m.drawstates(color='gray')
+    m.scatter(city_data['lon'].values, city_data['lat'].values, latlon=True,
+              c=city_data['percent'],s=250,alpha = 0.8, cmap = 'YlOrRd')
+    plt.colorbar(label=r'Percentage (%)')
+    plt.tick_params(axis='y', labelsize=20)
+
+    fig2 = plt.figure()
+    m2 = Basemap(projection='lcc', resolution='l',
+                lat_0=39.8333333, lon_0=-98.585522,
+                width=5E6, height=3E6)
+    m2.shadedrelief()
+    m2.drawcoastlines(color='gray')
+    m2.drawcountries(color='gray')
+    m2.drawstates(color='gray')
+    plt.fill_between([0, 5000000], [3000000 * 0.75, 3000000 * 0.75], [3000000, 3000000], facecolor='blue', alpha=0.2,
+                     label='{:.1f}%'.format(100 * top.mean()))
+    plt.fill_between([0, 5000000], [3000000 / 2, 3000000 / 2], [3000000 * 0.75, 3000000 * 0.75], facecolor='yellow',
+                     alpha=0.2, label='{:.1f}%'.format(100 * midtop.mean()))
+    plt.fill_between([0, 5000000], [3000000 / 4, 3000000 / 4], [3000000 / 2, 3000000 / 2], facecolor='red', alpha=0.2,
+                     label='{:.1f}%'.format(100 * midlow.mean()))
+
+    plt.fill_between([0,5000000], [3000000/4,3000000/4],facecolor='green', alpha = 0.2, label = '{:.1f}%'.format(100*bottom.mean()))
+    m2.scatter(city_data['lon'].values, city_data['lat'].values, latlon=True, c='black', s=60)
+    plt.legend(loc = 'lower left')
+
+    fig3 = plt.figure()
+    m3 = Basemap(projection='lcc', resolution='l',
+                lat_0=39.8333333, lon_0=-98.585522,
+                width=5E6, height=3E6)
+    m3.shadedrelief()
+    m3.drawcoastlines(color='gray')
+    m3.drawcountries(color='gray')
+    m3.drawstates(color='gray')
+    plt.fill_between([0, (5000000/4)-50000],[0,0],[3000000,3000000], facecolor='blue', alpha=0.2,
+                     label='Pacific: {:.1f}%'.format(100 * pacific.mean()))
+    plt.fill_between([(5000000/4)-50000, (5000000/2)-50000],[0,0],[3000000,3000000], facecolor='yellow',
+                     alpha=0.2, label='Mountain: {:.1f}%'.format(100 * mountain.mean()))
+    plt.fill_between([(5000000/2)-50000, (5000000*0.75)-250000],[0,0],[3000000,3000000], facecolor='red', alpha=0.2,
+                     label='Central: {:.1f}%'.format(100 * central.mean()))
+    plt.fill_between([(5000000*0.75)-250000,5000000],[0,0],[3000000,3000000],facecolor='green', alpha = 0.2, label = 'Eastern: {:.1f}%'.format(100*eastern.mean()))
+
+    m3.scatter(city_data['lon'].values, city_data['lat'].values, latlon=True, c='black', s=60)
+    plt.legend(loc = 'lower left')
+# make_map(df)
+def time_charts(data):
+    period_df = pd.DataFrame(data.groupby(['period'])['shot_made'].sum())
+    period_df['count'] =data.groupby(['period'])['shot_made'].count()
+    period_df['percent'] = 100*period_df['shot_made']/period_df['count']
+
+    fig1 = plt.figure()
+    ax1 = fig1.add_subplot(111)
+    ax1.bar(period_df.index, period_df.percent)
+    ax1.set(ylim = [60, 85], ylabel = 'Percentage (%)', xlabel = 'Period', xticklabels =  ['','Q1','Q2','Q3','Q4','OT','2OT','3OT','4OT',])
+    ax1.plot([period_df.index.min(), period_df.index.max()], [period_df.percent.min(),period_df.percent.max()], c = 'orange', linewidth = 6,linestyle='--')
+    ax1.tick_params(axis='both',which = 'both', labelsize=16)
+    t_o_g = []
+    for x in df.itertuples():
+        p = int(x.time.split(':')[0])
+        if x.period == float(1):
+            p = p + 36
+        elif x.period == float(2):
+            p = p+24
+        elif x.period == float(3):
+            p = p+12
+        else:
+            p = p
+        t_o_g.append('{}'.format(p))
+    df['time_of_game'] = pd.Series(t_o_g, index = df.index)
+    time_of_game = pd.DataFrame(df.groupby(['time_of_game'])['shot_made'].sum())
+    time_of_game['attempts'] = df.groupby(['time_of_game'])['shot_made'].count()
+    time_of_game['percent'] = 100* time_of_game['shot_made'] / time_of_game['attempts']
+    time_of_game.index = time_of_game.index.astype(int)
+
+    fig2 = plt.figure()
+    ax2 = fig2.add_subplot(111)
+    ax2.bar(time_of_game.sort_index(ascending = False).index, time_of_game.sort_index()['percent'].values)
+    ax2.bar([0, 12, 24, 36], [time_of_game.sort_index(ascending = False)['percent'].values[y] for y in [0, 12, 24, 36]])
+    ax2.tick_params(axis = 'x', which = 'both', labelsize=12)
+    ax2.set(ylim= [60,85],xticks= [x for x in range(48)],xticklabels = [x for x in range(48)][::1],ylabel = 'Percentage (%)', xlabel = 'Minute of Game ')
+    ax2.tick_params(axis='y', labelsize=16)
+time_charts(df)
+
 
 
