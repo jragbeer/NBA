@@ -1,7 +1,5 @@
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
 import datetime
 import time
 import pickle
@@ -15,11 +13,9 @@ from bokeh.io import curdoc
 from bokeh.events import ButtonClick, SelectionGeometry
 from dateutil import parser
 from bokeh.palettes import brewer
-import colorcet as cc
 from sqlalchemy import create_engine
 import pymysql
 from pytz import timezone
-from bokeh.transform import cumsum
 from bokeh.plotting import figure, show
 import sqlite3
 import pymongo
@@ -143,7 +139,7 @@ def clean_player_df(df):
     df = clean_player2(df)
     return df
 def get_salary_scatter_data(data):
-    salaries = pd.read_csv(path + 'salary data/playersalaries.csv')
+    salaries = pd.read_csv(data_path + 'playersalaries.csv')
     salaries['Player'] = salaries['Player'].str.lower()
     salaries['Player'] = pd.Series([x.replace('.', '').replace("'", '') for x in salaries.Player], index=salaries.index)
     new = pd.DataFrame(data.groupby(['player']).agg({'shot_made':'sum'}))
@@ -203,7 +199,7 @@ def consolidate_to_single_df():
     for k, v in {"GS": "GSW", 'NJ': 'NJN', 'NO': 'NOP', 'NY': 'NYK', 'UTAH': 'UTA',}.items():
         idf.replace(k, v, inplace = True)
 
-    salaries = pd.read_csv(path + 'salary data/playersalaries.csv')
+    salaries = pd.read_csv(data_path + 'playersalaries.csv')
     salaries['Player'] = salaries['Player'].str.lower()
     salaries['Player'] = pd.Series([x.replace('.', '').replace("'", '') for x in salaries.Player], index=salaries.index)
 
@@ -400,7 +396,7 @@ season_stats = get_season_stats()
 
 # pickle_in = open(path + "data.pickle","rb")
 # df = pickle.load(pickle_in)
-data = pd.read_parquet(path + 'nba_free_throw_data.parquet')
+data = pd.read_parquet(data_path + 'nba_free_throw_data.parquet')
 # ----------------------------------------
 def update_absolute(attr, old, new):
     score_dif_source.data = dict(make_score_dif_source(new).data)
