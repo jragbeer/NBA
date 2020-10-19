@@ -12,4 +12,4 @@ This includes player salary data, which was taken form Hoop Hype (a number of ye
 As well, team membership data was taken from ESPN, corresponding to each game number from the NBA Free Throws dataset hosted on Kaggle.
 An example webpage would be: http://www.espn.com/nba/boxscore?gameId=401071852
 
-An ipython notebook will be created that mirrors the slideshow.
+Go to <a href='https://jrbeer.xyz'>jrbeer.xyz</a> for more 
