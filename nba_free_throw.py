@@ -666,6 +666,7 @@ period_chart.add_tools(HoverTool(tooltips=[("Period", "@periods"),("Percentage (
 period_chart.xaxis.ticker.desired_num_ticks = len(period_df.index)
 period_chart.yaxis.ticker.desired_num_ticks = 10
 period_chart.xaxis.major_label_overrides = {i+1: v for i, v in enumerate(periods)}
+period_chart.yaxis[0].formatter = NumeralTickFormatter(format="0,0")
 
 # ----------------------------------------
 
