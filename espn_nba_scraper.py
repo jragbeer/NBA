@@ -19,7 +19,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 import traceback
-
+import os
 
 def grab_soup(url_, browser="firefox", indicator=''):
     """
@@ -43,7 +43,7 @@ def grab_soup(url_, browser="firefox", indicator=''):
         chromeOptions.add_argument("--headless")
         chromeOptions.add_argument('--no-sandbox')
         chromeOptions.add_argument('--disable-dev-shm-usage')
-        driver = webdriver.Chrome(options=chromeOptions)
+        driver = webdriver.Chrome('C:/Users/Julien/PycharmProjects/practice/chromedriver86', options=chromeOptions)
     else:
         firefoxOptions = firefox_options()
         firefoxOptions.set_preference("browser.download.folderList", 2)
@@ -72,94 +72,24 @@ def grab_soup(url_, browser="firefox", indicator=''):
             print("Loading took too much time!")
 
     time.sleep(0.5)
-    html = driver.page_source
+    try:
+        html = driver.page_source
+    except:
+        pass
     # sleep for 1 second  to ensure all JS scripts are loaded
-    html = driver.execute_script("return document.body.outerHTML;")  # execute javascript code
+    try:
+        html = driver.execute_script("return document.body.outerHTML;")  # execute javascript code
+    except:
+        pass
     soup_ = bs.BeautifulSoup(html, 'lxml')  # read the data as html (using lxml driver)
     # pprint(soup_)
     return soup_, driver
-
-def make_df_matchup(cols, dat):
-    row_headers = []
-    team_1 = []
-    team_2 = []
-    for num, each in enumerate(dat):
-        if num % 3 == 0:
-            row_headers.append(each)
-        elif (num - 1) % 3 == 0:
-            team_1.append(each)
-        else:
-            team_2.append(each)
-    return pd.DataFrame(data={str(cols[0]): row_headers, str(cols[1]): team_1, str(cols[2]): team_2})
-
-@dask.delayed
-def get_game_ids_by_season(team, year, season_ind):
-    print(year, team, season_ind)
-    kk = [0]
-    try:
-        if season_ind == 'regular':
-            url = f"https://www.espn.com/nba/team/schedule/_/name/{team}/season/{year}/seasontype/2"
-        elif season_ind == 'playoffs':
-            url = f"https://www.espn.com/nba/team/schedule/_/name/{team}/season/{year}/seasontype/3"
-        soup, c = grab_soup(url, 'chrome')
-        kk = re.findall(r'http://www.espn.com/nba/game\?gameId=\d+', str(soup))
-        c.close()
-        return list(set(kk))
-    except:
-        print(error_handling())
-        try:
-            c.close()
-        except:
-            pass
-        finally:
-            return list(set(kk))
-
-
-def get_all_teams():
+def error_handling():
     """
-    Returns a list of all team abbreviations (ie. Toronto Raptors == tor) found from the 2020 season on espn.com
-    :return: a list of all 30 teams' abbreviations
+    This function returns a string with all of the information regarding the error
+    :return: string with the error information
     """
-    try:
-        soup, c = grab_soup("https://www.espn.com/nba/team/schedule/_/name/atl/season/2020", 'chrome')
-        regex_return = re.findall(r'/nba/team/_/name/\S+",', str(b))
-        teams_list = [x.replace('/nba/team/_/name/', '').split('/')[0].replace(",", '').replace('"', '') for x in list(regex_return)]
-        all_teams_collection = set([i for i in teams_list if len(i) < 5])
-        length = len(all_teams_collection)
-        if length == 30:
-            print('got all teams')
-        c.close()
-        return all_teams_collection
-    except:
-        c.close()
-        return
-
-
-def get_all_gameids_by_year():
-    yy= []
-    for yr in range(2009, 2017):
-        for szn in ['regular', 'playoffs']:
-            for i in teams:
-                if yr == 2020:
-                    if szn == 'playoffs':
-                        continue
-                yy.append(get_game_ids_by_season(i, yr, szn))
-                time.sleep(1)
-                if len(yy) == 10:
-                    break
-            else:
-                break
-        else:
-            break
-    # all_games_all_years[yr] = all_games
-    result = dask.compute(yy)[0]
-    pprint(result[0])
-
-    pickle_out = open("all_games_all_years_XXX.pickle", "wb")
-    pickle.dump(result, pickle_out)
-    pickle_out.close()
-    print(datetime.datetime.now() - timee)
-    print()
+    return traceback.format_exc()
 
 @dask.delayed
 def grab_matchup_info(gameid):
@@ -185,6 +115,19 @@ def grab_matchup_info(gameid):
         return 1
     time.sleep(2)
     return df
+def make_df_matchup(cols, dat):
+    row_headers = []
+    team_1 = []
+    team_2 = []
+    for num, each in enumerate(dat):
+        if num % 3 == 0:
+            row_headers.append(each)
+        elif (num - 1) % 3 == 0:
+            team_1.append(each)
+        else:
+            team_2.append(each)
+    return pd.DataFrame(data={str(cols[0]): row_headers, str(cols[1]): team_1, str(cols[2]): team_2})
+
 
 @dask.delayed
 def grab_game_info(gameid):
@@ -229,28 +172,42 @@ def grab_game_info(gameid):
     except:
         return 1
 
+
 @dask.delayed
 def grab_playbyplay_info(gameid):
     matchup_url = f"https://www.espn.com/nba/playbyplay?gameId={gameid}"
     soup, c = grab_soup(matchup_url, 'chrome', 'playbyplay')
     accordion = soup.find_all('li', class_='accordion-item')
+
+    teams_in_game = {}
+    for num, t in enumerate(soup.find_all('div', class_='team-info-wrapper')):
+        long_name = t.find('span', class_='short-name')
+        short_name = t.find('span', class_='long-name')
+        abbrev = t.find('span', class_='abbrev')
+        teams_in_game[f'team_{num}'] = {"abbrev": abbrev.text.lower(), 'short_name':short_name.text.lower(), 'long_name':long_name.text.lower()}
     try:
         dfs = []
         for x in accordion:
             qtr = x.find_all('h3')[0]
-            columns = []
             info = []
             imgs = []
             for tbl in x.find_all('table'):
-                for y in tbl.find_all('thead'):
-                    for a in y.find_all('th'):
-                        columns.append(a.text.lower())
+                # get the column names
+                columns = [a.text.lower() for y in tbl.find_all('thead') for a in y.find_all('th')]
+                # get the contents of the data table
                 for y in tbl.find_all('tbody'):
+                    # get all data elements
                     for a in y.find_all('td'):
                         info.append(a.text.strip())
-                        for k in a.find_all('img'):
-                            imgs.append(str(k).split('teamlogos/nba/500/')[1].split('.')[0])
-                        continue
+                    # find the logo elements, or the differentiator for each team
+                    for a in y.find_all('td', class_='logo'):
+                        # if there's no image, append an empty string, to be filled in later
+                        imgs_in_col = a.find_all('img')
+                        if imgs_in_col:
+                            for k in imgs_in_col:
+                                imgs.append(str(k).split('teamlogos/nba/500/')[1].split('.')[0])
+                        else:
+                            imgs.append(np.nan)
             dat = [[info[t] for t in range(5)]] + [[info[t] for t in range(i-5, i)] for i in range(5, len(info), 5)]
             dat = [i[:4] for i in dat]
             for i, each in enumerate(dat):
@@ -261,32 +218,46 @@ def grab_playbyplay_info(gameid):
             df['quarter'] = qtr.text.strip()[:4].upper()
             dfs.append(df)
         total_game_df = pd.concat(dfs)
+        total_game_df.drop_duplicates(subset=['quarter', "score", "play", 'time'], inplace=True)
+        total_game_df['team'].fillna([x['abbrev'] for x in teams_in_game.values() if x not in total_game_df["team"].unique()][0], inplace=True)
     except Exception as ie:
-        print(str(ie))
+        print(error_handling())
         c.close()
     try:
         c.close()
     except:
         pass
     try:
+        print(f"{gameid}, done")
         return total_game_df
     except:
+        print(f"{gameid}, error2")
         return 1
+
 
 @dask.delayed
 def grab_boxscore_info(gameid):
-
-    matchup_url = f"https://www.espn.com/nba/boxscore?gameId={gameid}"
-    soup, c = grab_soup(matchup_url, 'chrome', 'boxscore')
-    main_div = soup.find_all('div', class_='sub-module')
     imgs = []
-    teams = []
+    teams_ = []
+    matchup_url = f"https://www.espn.com/nba/boxscore?gameId={gameid}"
     try:
+        soup, c = grab_soup(matchup_url, 'chrome', 'boxscore')
+        main_div = soup.find_all('div', class_='sub-module')
+
         for x in main_div:
             # find the teams playing, first team in *imgs* corresponds to the first table
             for im in x.find_all('div', class_='team-name'):
                 for k in im.find_all('img'):
                     imgs.append(str(k).split('teamlogos/nba/500/')[1].split('.')[0])
+
+        if len(imgs) < 2:
+            imgs = []
+            for x in main_div:
+                # find the teams_ playing, first team in *imgs* corresponds to the first table
+                for im in x.find_all('div', class_='team-name'):
+                    imgs.append(possible_teams[im.text])
+                    print(possible_teams[im.text], im.text)
+
         for div_num, x in enumerate(main_div):
             columns = []
             info = []
@@ -307,11 +278,10 @@ def grab_boxscore_info(gameid):
             columns = [u if u==v else 'player' for u, v in zip(columns[0], columns[1])]
             for each in info:
                 if 'TEAM' in each:
-                    # print(each)
                     each = each[:each.index('TEAM')] # remove team aggregate stats
-                    if "DNP-COACH'S DECISION" in each:
-                        DNPs = each[each.index("DNP-COACH'S DECISION")-1:]
-                        bench_info = each[:each.index("DNP-COACH'S DECISION")-1]
+                    if "DNP-" in each:
+                        DNPs = each[each.index("DNP-")-1:]
+                        bench_info = each[:each.index("DNP-")-1]
                     else:
                         bench_info = each
 
@@ -347,12 +317,16 @@ def grab_boxscore_info(gameid):
 
             for col_name in [x for x in team.columns if x not in ['player', 'team', 'min']]:
                 team[col_name] = pd.to_numeric(team[col_name], errors='coerce', downcast="integer")
-            teams.append(team)
-        total_game_df = pd.concat(teams)
+            teams_.append(team)
+        total_game_df = pd.concat(teams_)
         total_game_df.reset_index(drop=True, inplace=True)
     except Exception as ie:
         print(gameid, '\n', error_handling())
-        c.close()
+        try:
+            c.close()
+        except UnboundLocalError:
+            pass
+
     try:
         c.close()
     except:
@@ -361,7 +335,37 @@ def grab_boxscore_info(gameid):
         return total_game_df
     except:
         return 1
+def transform_boxscore(gameid):
+    df = pd.read_sql(f"""select * from "gameid_{gameid}" """, engine_boxscore)
+    df['player'].replace("Nene", "H. Nene", inplace=True)
+    df = df[~df.player.str.contains("DNP")]
+    df = df[~df.player.str.contains("Did not Play")]
+    df = df[~df.player.str.contains("Did not play")]
+    df = df[~df.player.str.contains("Did Not Play")]
+    position = []
+    player_name = []
+    try:
+        for x in df['player']:
+            pos = re.search(r"(?=\w)(PF|C|SF|SG|PG|F|G)$", x)
+            name = re.search(r"^.+\.\s[^.]+(?=\w+\.)", x)
+            b = name.group(0)
+            try:
+                a = name.group(1)
+                if a:
+                    c = str(a) + str(b)
+                else:
+                    c = b
+            except Exception as e:
+                c = b
+            player_name.append(c)
+            position.append(pos.group())
 
+        df['player'] = player_name
+        df['position'] = position
+        df.to_sql(f"gameid_{i}", engine_boxscore, if_exists = 'replace', index=False)
+    except Exception as e:
+        print(str(e))
+        print(str(gameid))
 def split_stats_column(dataf, col_to_split):
     if col_to_split == '3pt':
         dataf[f'3pm'] = [qq.split('-')[0] for qq in dataf[col_to_split]]
@@ -370,13 +374,6 @@ def split_stats_column(dataf, col_to_split):
         dataf[f'{col_to_split}m'] = [qq.split('-')[0] for qq in dataf[col_to_split]]
         dataf[f'{col_to_split}a'] = [qq.split('-')[1] for qq in dataf[col_to_split]]
     return dataf
-
-def error_handling():
-    """
-    This function returns a string with all of the information regarding the error
-    :return: string with the error information
-    """
-    return traceback.format_exc()
 
 def grab_data_parallel(func):
     """
@@ -387,7 +384,8 @@ def grab_data_parallel(func):
     :return: nothing
     """
     # query all table names
-    func_name = repr(func).split("'")[1].split('-')[0]
+    func_name = repr(func).split("'")[1].split('-')[0] # way to get func name for dask (wrapped in Delayed object)
+
     if func_name == "grab_matchup_info":
         game_ids = pd.read_sql("""SELECT name FROM sqlite_master WHERE type ='table' AND name NOT LIKE 'sqlite_%' """, engine)['name'].to_list()
         game_ids = set(int(x.replace('gameid_', '')) for x in game_ids)
@@ -417,8 +415,8 @@ def grab_data_parallel(func):
     # filter so that array = all game_ids without a record in database
     array = [int(i.split('=')[1]) for i in games_list if int(i.split('=')[1]) not in game_ids]
     print(len(array),' left')
-    # array = ["400900324"]
     for t, i in enumerate(array):
+        # print(i)
         try:
             try:
                 dataframe = func(i)
@@ -436,7 +434,7 @@ def grab_data_parallel(func):
             print(e)
             continue
         final.append(dataframe)
-        if len(final) == 500: # stop before entire *array* is done
+        if len(final) == 2000: # stop before entire *array* is done
             break
     # execute in parallel, showing one of the objects
     result = dask.compute(final)[0]
@@ -481,38 +479,108 @@ def grab_data_parallel(func):
     print()
 
 
-def transform_boxscore(gameid):
-    df = pd.read_sql(f"""select * from "gameid_{gameid}" """, engine_boxscore)
-    df['player'].replace("Nene", "H. Nene", inplace=True)
-    df = df[~df.player.str.contains("DNP")]
-    position = []
-    player_name = []
+
+@dask.delayed
+def get_game_ids_by_season(team, year, season_ind):
+    print(year, team, season_ind)
+    kk = [0]
     try:
-        for x in df['player']:
-            pos = re.search(r"(?=\w)(PF|C|SF|SG|PG|F|G)$", x)
-            name = re.search(r"^.+\.\s[^.]+(?=\w+\.)", x)
-            b = name.group(0)
-            try:
-                a = name.group(1)
-                if a:
-                    c = str(a) + str(b)
-                else:
-                    c = b
-            except Exception as e:
-                c = b
-            player_name.append(c)
-            position.append(pos.group())
-
-
-        df['player'] = player_name
-        df['position'] = position
-        print(df.to_string())
+        if season_ind == 'regular':
+            url = f"https://www.espn.com/nba/team/schedule/_/name/{team}/season/{year}/seasontype/2"
+        elif season_ind == 'playoffs':
+            url = f"https://www.espn.com/nba/team/schedule/_/name/{team}/season/{year}/seasontype/3"
+        soup, c = grab_soup(url, 'chrome')
+        kk = re.findall(r'http://www.espn.com/nba/game\?gameId=\d+', str(soup))
+        c.close()
+        return list(set(kk))
     except:
-        print(str(gameid))
+        print(error_handling())
+        try:
+            c.close()
+        except:
+            pass
+        finally:
+            return list(set(kk))
+def get_all_teams():
+    """
+    Returns a list of all team abbreviations (ie. Toronto Raptors == tor) found from the 2020 season on espn.com
+    :return: a list of all 30 teams' abbreviations
+    """
+    try:
+        soup, c = grab_soup("https://www.espn.com/nba/team/schedule/_/name/atl/season/2020", 'chrome')
+        regex_return = re.findall(r'/nba/team/_/name/\S+",', str(b))
+        teams_list = [x.replace('/nba/team/_/name/', '').split('/')[0].replace(",", '').replace('"', '') for x in list(regex_return)]
+        all_teams_collection = set([i for i in teams_list if len(i) < 5])
+        length = len(all_teams_collection)
+        if length == 30:
+            print('got all teams')
+        c.close()
+        return all_teams_collection
+    except:
+        c.close()
+        return
+def get_all_gameids_by_year_list():
+    yy= []
+    for yr in range(2006, 2020):
+        for szn in ['regular', 'playoffs']:
+            for i in teams:
+                yy.append(get_game_ids_by_season(i, yr, szn))
+                # if yr == 2020:
+                #     if szn == 'playoffs':
+                #         continue
+
+                # print(len(yy))
+                # time.sleep(1)
+                # if len(yy) == 12:
+                #     print('wtf')
+                #     break
+            else:
+                continue
+            break
+        else:
+            continue
+        break
+    result = dask.compute(yy)[0]
+    pprint(result[0])
+    pickle_out = open(path + "all_games_all_years_oct2020.pickle", "wb")
+    pickle.dump(result, pickle_out)
+    pickle_out.close()
+    print(datetime.datetime.now() - timee)
+    print()
+def get_all_gameids_by_year_dict():
+    output = {}
+    for yr in range(2006, 2021):
+        output[yr] = {}
+        for szn in ['regular', 'playoffs']:
+            output[yr][szn] = {}
+            for i in teams:
+                output[yr][szn][i] = get_game_ids_by_season(i, yr, szn)
+                # if yr == 2020:
+                #     if szn == 'playoffs':
+                #         continue
+
+                # print(len(yy))
+                # time.sleep(1)
+                # if len(yy) == 12:
+                #     print('wtf')
+                #     break
+            else:
+                continue
+            break
+        else:
+            continue
+        break
+    result = dask.compute(output)[0]
+    pprint(result[2019]["regular"])
+    pickle_out = open(path + "all_games_all_years_oct2020_dict.pickle", "wb")
+    pickle.dump(result, pickle_out)
+    pickle_out.close()
+    print(datetime.datetime.now() - timee)
+    print()
 if __name__ == '__main__':
     # Set-up
-    # cluster = LocalCluster()
-    # client = Client(cluster)
+    cluster = LocalCluster(threads_per_worker=12,)
+    client = Client(cluster)
 
     # parse to find out all team abbreviations for URL (i.e. Toronto Raptors == tor)
     # teams = get_all_teams()
@@ -545,12 +613,22 @@ if __name__ == '__main__':
      'tor',
      'utah',
      'wsh'}
-    path = 'C:/Users/Julien/PycharmProjects/nba/data/'
+    possible_teams = {"Rockets":'hou', "Heat":'mia', 'Raptors':'tor',
+                      "Hawks":'atl', "Nets":'nj', 'Spurs':'sa',"Magic":"orl",
+                      "Mavericks":'dal', "Clippers":'lac', 'Lakers':'lal',
+                      "Suns":'phx', "Bucks":'mil', 'Warriors':'gs', "Bulls":"chi",
+                      "Nuggets":'den', "Cavaliers":'cle', 'Bobcats':'cha',
+                      "Pistons":'det', "Thunder":'okc', 'Hornets':'cha',
+                      "Celtics":'bos', "Jazz":'utah', 'Pelicans':'no', "Knicks":"ny",
+                      'Wizards':'wsh',"76ers":'phi', "Kings":'sac', "Pacers":'ind',
+                      "Trail Blazers":'por', "Grizzlies":'mem', "Timberwolves":"min"}
+    path = os.getcwd().replace("\\", "/") + "/data/"
     timee = datetime.datetime.now()
     print(timee)
     # dictionary with all games for each team between 2016-2017 and 2020 seasons or 2008-2009 to 2015-2016 seasons.
-    pickle_in = open(path + "all_games_all_years_2009_2016.pickle","rb")
+    pickle_in = open(path + "all_games_all_years_oct2020.pickle","rb")
     data = pickle.load(pickle_in)
+    # pprint(data)
     #SQLITE3 DATABASE (matchup)
     engine = sqlite3.connect(path + 'nba_matchup_data.db')
     #SQLITE3 DATABASE (play by play)
@@ -563,5 +641,7 @@ if __name__ == '__main__':
     collection = db['basic_game_info']
 
     # main function
-    # grab_data_parallel(grab_matchup_info)
-    transform_boxscore("400899364")
+    get_all_gameids_by_year_dict()
+
+
+
