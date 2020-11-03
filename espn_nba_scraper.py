@@ -580,8 +580,15 @@ def get_all_gameids_by_year_dict():
     pprint(result[2019]["regular"])
     print()
 
-
-
+# ESPN Hidden API
+def make_sure_table_has_no_duplicates(table_name, df, conn_):
+    df.to_sql(table_name, conn_, if_exists='append', index=False)
+    new_df = pd.read_sql(f"select * from {table_name}", conn_)
+    crazy = new_df.drop_duplicates().copy()
+    if len(new_df.index) > len(crazy.index):
+        crazy.to_sql(table_name, conn_, if_exists='replace', index=False)
+    else:
+        pass
 def get_data_from_api(gameid = "401071727"):
     def get_player_boxscore_data_from_api(boxscore):
         boxscore_df_ = []
@@ -609,13 +616,24 @@ def get_data_from_api(gameid = "401071727"):
             r.columns = [x.lower().replace(' ', '_').replace("%", 'pct') for x in r.columns]
             boxscore_df_.append(r)
         return pd.concat(boxscore_df_)
-    def get_game_info_data_from_api(game_info):
+    def get_game_info_data_from_api(game_info, header):
         info = {'venue': game_info['venue']['fullName'],
                 'capacity': game_info['venue']['capacity'],
                 'city': game_info['venue']['address']['city'],
                 'state':game_info['venue']['address']['state'],
                 'attendance': game_info['attendance'],
+                'date': header["competitions"][0]["date"],
                 'officials': ' / '.join([x['displayName'] for x in game_info['officials']])}
+        parsed_header = {i['homeAway']: {'winner': i['winner'], 'team_name': i['team']['displayName'], 'abbreviation':i['team']['abbreviation']}
+                         for i in header["competitions"][0]["competitors"]}
+        info['home_team'] = parsed_header['home']['team_name']
+        info['home_team_abbrev'] = parsed_header['home']['abbreviation']
+        info['away_team'] = parsed_header['away']['team_name']
+        info['away_team_abbrev'] = parsed_header['away']['abbreviation']
+        if parsed_header['home']['winner']:
+            info['winning_team'] = info['home_team']
+        else:
+            info['winning_team'] = info['away_team']
         return pd.DataFrame(info, index = [0])
     def get_playbyplay_data_from_api(play_data):
         plays = []
@@ -634,7 +652,6 @@ def get_data_from_api(gameid = "401071727"):
         output['type_of_play'] = output['type_of_play'].str.replace("\n", " ")
         return output
 
-
     url = f"http://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={gameid}"
     json_return = requests.get(url).json()
 
@@ -643,11 +660,24 @@ def get_data_from_api(gameid = "401071727"):
 
     player_boxscore_df = get_player_boxscore_data_from_api(json_return['boxscore']['players'])
 
-    game_info_data = get_game_info_data_from_api(json_return['gameInfo'])
+    game_info_data = get_game_info_data_from_api(json_return['gameInfo'], json_return['header'])
     game_info_data['game_id'] = gameid
 
     playbyplay_data = get_playbyplay_data_from_api(json_return['plays'])
-    return team_boxscore_df, player_boxscore_df, game_info_data,playbyplay_data
+    return team_boxscore_df, player_boxscore_df, game_info_data, playbyplay_data
+def pull_from_espn_api(gid = "401071727"):
+    team_boxscore, player_boxscore, matchup, playbyplay = get_data_from_api(gid)
+    print(team_boxscore.to_string())
+    make_sure_table_has_no_duplicates('team_boxscore', team_boxscore, new_matchup_conn)
+    print(player_boxscore.to_string())
+    player_boxscore.to_sql(gid, new_boxscore_conn, if_exists='replace', index=False)
+    print(matchup.to_string())
+    make_sure_table_has_no_duplicates('matchup', matchup, new_matchup_conn)
+    print(playbyplay.to_string())
+    playbyplay.to_sql(gid, new_playbyplay_conn, if_exists='replace', index=False)
+    print()
+    print(f"game_id:{gid} has been added to the databases")
+    print(datetime.datetime.now()-timee)
 
 if __name__ == '__main__':
     # Set-up
@@ -707,16 +737,19 @@ if __name__ == '__main__':
     engine_playbyplay = sqlite3.connect(path + 'nba_playbyplay_data.db')
     #SQLITE3 DATABASE (boxscore)
     engine_boxscore = sqlite3.connect(path + 'nba_boxscore_data.db')
+
+    new_matchup_conn = sqlite3.connect(path + 'nba_new_matchup_data.db')
+    #SQLITE3 DATABASE (play by play)
+    new_playbyplay_conn = sqlite3.connect(path + 'nba_new_playbyplay_data.db')
+    #SQLITE3 DATABASE (boxscore)
+    new_boxscore_conn = sqlite3.connect(path + 'nba_player_boxscore_data.db')
+
     #MONGODB DATABASE
     mongo_client = pymongo.MongoClient('localhost', 27017)
     db = mongo_client['NBA']
     collection = db['basic_game_info']
     pprint(data)
-    a, b, c, d = get_data_from_api()
-    print(a.to_string())
-    print(b.to_string())
-    print(c.to_string())
-    print(d.to_string())
+    pull_from_espn_api()
     # main function
     # get_all_gameids_by_year_dict()
 
