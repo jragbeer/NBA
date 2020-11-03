@@ -1,4 +1,5 @@
 from selenium import webdriver
+import json
 import time
 import bs4 as bs
 import datetime
@@ -20,6 +21,7 @@ from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
 import traceback
 import os
+import requests
 
 def grab_soup(url_, browser="firefox", indicator=''):
     """
@@ -551,10 +553,10 @@ def get_all_gameids_by_year_dict():
     output = {}
     for yr in range(2006, 2021):
         output[yr] = {}
-        for szn in ['regular', 'playoffs']:
-            output[yr][szn] = {}
-            for i in teams:
-                output[yr][szn][i] = get_game_ids_by_season(i, yr, szn)
+        for t in teams:
+            output[yr][t] = {}
+            for szn in ['regular', 'playoffs']:
+                output[yr][t][szn] = get_game_ids_by_season(t, yr, szn)
                 # if yr == 2020:
                 #     if szn == 'playoffs':
                 #         continue
@@ -571,16 +573,86 @@ def get_all_gameids_by_year_dict():
             continue
         break
     result = dask.compute(output)[0]
-    pprint(result[2019]["regular"])
-    pickle_out = open(path + "all_games_all_years_oct2020_dict.pickle", "wb")
+    pickle_out = open(path + "all_games_all_years_nov2020_dict.pickle", "wb")
     pickle.dump(result, pickle_out)
     pickle_out.close()
     print(datetime.datetime.now() - timee)
+    pprint(result[2019]["regular"])
     print()
+
+
+
+def get_data_from_api(gameid = "401071727"):
+    def get_player_boxscore_data_from_api(boxscore):
+        boxscore_df_ = []
+        for team in boxscore:
+            team_name = team['team']['slug']
+            columns = team['statistics'][0]['names']
+            for each in team['statistics'][0]['athletes']:
+                r = pd.DataFrame(each['stats'], index=columns).T
+                r['Player'] = each['athlete']['displayName']
+                r['Jersey_number'] = each['athlete']['jersey']
+                r['position'] = each['athlete']['position']['abbreviation']
+                r['START'] = each['starter']
+                r['EJECTED'] = each['ejected']
+                r['DNP'] = each['didNotPlay']
+                r['REASON'] = each['reason']
+                r['TEAM'] = team_name
+                r.columns = [x.lower().replace(' ', '_').replace("%", 'pct') for x in r.columns]
+                boxscore_df_.append(r)
+        return pd.concat(boxscore_df_).reset_index(drop=True)
+    def get_team_boxscore_data_from_api(boxscore):
+        boxscore_df_ = []
+        for team in boxscore:
+            r = pd.DataFrame.from_dict(team['statistics']).set_index('label').drop(columns=['name', 'abbreviation']).T
+            r.index = [team['team']['slug']]
+            r.columns = [x.lower().replace(' ', '_').replace("%", 'pct') for x in r.columns]
+            boxscore_df_.append(r)
+        return pd.concat(boxscore_df_)
+    def get_game_info_data_from_api(game_info):
+        info = {'venue': game_info['venue']['fullName'],
+                'capacity': game_info['venue']['capacity'],
+                'city': game_info['venue']['address']['city'],
+                'state':game_info['venue']['address']['state'],
+                'attendance': game_info['attendance'],
+                'officials': ' / '.join([x['displayName'] for x in game_info['officials']])}
+        return pd.DataFrame(info, index = [0])
+    def get_playbyplay_data_from_api(play_data):
+        plays = []
+        for each in play_data:
+            info = dict(espn_game_index = each['sequenceNumber'],
+            type_of_play = each['type']['text'],
+            play = each['text'],
+            away_score = each["awayScore"],
+            home_score = each["homeScore"],
+            period = each['period']['displayValue'],
+            clock = each['clock']['displayValue'],
+            # team_of_player = each['team']['id'],
+                        )
+            plays.append(pd.DataFrame(info, index=[0]))
+        output = pd.concat(plays).reset_index(drop=True)
+        output['type_of_play'] = output['type_of_play'].str.replace("\n", " ")
+        return output
+
+
+    url = f"http://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary?event={gameid}"
+    json_return = requests.get(url).json()
+
+    team_boxscore_df = get_team_boxscore_data_from_api(json_return['boxscore']['teams'])
+    team_boxscore_df['game_id'] = gameid
+
+    player_boxscore_df = get_player_boxscore_data_from_api(json_return['boxscore']['players'])
+
+    game_info_data = get_game_info_data_from_api(json_return['gameInfo'])
+    game_info_data['game_id'] = gameid
+
+    playbyplay_data = get_playbyplay_data_from_api(json_return['plays'])
+    return team_boxscore_df, player_boxscore_df, game_info_data,playbyplay_data
+
 if __name__ == '__main__':
     # Set-up
-    cluster = LocalCluster(threads_per_worker=12,)
-    client = Client(cluster)
+    # cluster = LocalCluster(threads_per_worker=12,)
+    # client = Client(cluster)
 
     # parse to find out all team abbreviations for URL (i.e. Toronto Raptors == tor)
     # teams = get_all_teams()
@@ -626,7 +698,7 @@ if __name__ == '__main__':
     timee = datetime.datetime.now()
     print(timee)
     # dictionary with all games for each team between 2016-2017 and 2020 seasons or 2008-2009 to 2015-2016 seasons.
-    pickle_in = open(path + "all_games_all_years_oct2020.pickle","rb")
+    pickle_in = open(path + "all_games_all_years_oct2020_dict.pickle","rb")
     data = pickle.load(pickle_in)
     # pprint(data)
     #SQLITE3 DATABASE (matchup)
@@ -639,9 +711,14 @@ if __name__ == '__main__':
     mongo_client = pymongo.MongoClient('localhost', 27017)
     db = mongo_client['NBA']
     collection = db['basic_game_info']
-
+    pprint(data)
+    a, b, c, d = get_data_from_api()
+    print(a.to_string())
+    print(b.to_string())
+    print(c.to_string())
+    print(d.to_string())
     # main function
-    get_all_gameids_by_year_dict()
+    # get_all_gameids_by_year_dict()
 
 
 
