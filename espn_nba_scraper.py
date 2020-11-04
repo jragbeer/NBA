@@ -1,8 +1,9 @@
 from selenium import webdriver
-import json
 import time
+import pytz
 import bs4 as bs
 import datetime
+from dateutil import parser
 import pprint
 import re
 import pickle
@@ -130,7 +131,6 @@ def make_df_matchup(cols, dat):
             team_2.append(each)
     return pd.DataFrame(data={str(cols[0]): row_headers, str(cols[1]): team_1, str(cols[2]): team_2})
 
-
 @dask.delayed
 def grab_game_info(gameid):
     matchup_url = f"https://www.espn.com/nba/game?gameId={gameid}"
@@ -173,7 +173,6 @@ def grab_game_info(gameid):
         return output
     except:
         return 1
-
 
 @dask.delayed
 def grab_playbyplay_info(gameid):
@@ -235,7 +234,6 @@ def grab_playbyplay_info(gameid):
     except:
         print(f"{gameid}, error2")
         return 1
-
 
 @dask.delayed
 def grab_boxscore_info(gameid):
@@ -480,8 +478,6 @@ def grab_data_parallel(func):
     print(end_time)
     print()
 
-
-
 @dask.delayed
 def get_game_ids_by_season(team, year, season_ind):
     print(year, team, season_ind)
@@ -679,10 +675,43 @@ def pull_from_espn_api(gid = "401071727"):
     print(f"game_id:{gid} has been added to the databases")
     print(datetime.datetime.now()-timee)
 
+def pull_daily_game_data_from_api(sql_engine, mongo_coll, query_date = datetime.datetime.now().date(), ):
+    try:
+        today = datetime.datetime.now()
+        query_date_ = query_date.strftime('%Y/%m/%d')
+        url = f"http://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates={query_date_.replace('/', '')}"
+        json_return = requests.get(url).json()
+        time_it_takes = datetime.datetime.now()-today
+        print(f'Query returned in {time_it_takes} / {time_it_takes.seconds} seconds')
+        assert json_return['leagues'][0]['abbreviation'] == 'NBA'
+        mongo_coll.insert_one({'query_date_': json_return})
+        print(f'Data for {query_date_} in MongoDB')
+        games_of_the_day = []
+        for each in json_return['events']:
+            date_ = each['date']
+            fun = parser.isoparse(date_).astimezone(pytz.timezone('America/New_York'))
+            assert fun.date() == query_date
+            id_ = each['id']
+            game = each['name']
+            games_of_the_day.append({'game_id':id_, 'game':game, 'datetime':fun, 'season':each['season']['year'],})
+        df = pd.DataFrame(games_of_the_day)
+        make_sure_table_has_no_duplicates('all_games', df, sql_engine)
+        print(f'Data for {query_date_} in SQL')
+        return (0, query_date_)
+    except AssertionError:
+        print(f'ERROR: {query_date_} <<<<<<<<<')
+        print(fun.date(), query_date)
+        return (1,query_date_)
+    except KeyError:
+        print(f'ERROR: {query_date_} <<<<<<<<<')
+        pprint(json_return)
+        return (1,query_date_)
+
+
 if __name__ == '__main__':
     # Set-up
-    # cluster = LocalCluster(threads_per_worker=12,)
-    # client = Client(cluster)
+    cluster = LocalCluster(threads_per_worker=6,)
+    client = Client(cluster)
 
     # parse to find out all team abbreviations for URL (i.e. Toronto Raptors == tor)
     # teams = get_all_teams()
@@ -748,8 +777,18 @@ if __name__ == '__main__':
     mongo_client = pymongo.MongoClient('localhost', 27017)
     db = mongo_client['NBA']
     collection = db['basic_game_info']
+    nba_collection = db['games_by_date']
     pprint(data)
-    pull_from_espn_api()
+    start_date = datetime.date(2005,11,1)
+    errors = []
+    for num, i in enumerate(pd.date_range(start_date, timee.date())):
+        if num % 100 == 0 and num > 0:
+            time.sleep(30)
+        errors.append(pull_daily_game_data_from_api(new_matchup_conn, nba_collection, i.date()))
+    errors = [x[1] for x in errors if x[0] == 1]
+    print(len(errors), errors)
+    print(datetime.datetime.now() - timee)
+    # pull_from_espn_api()
     # main function
     # get_all_gameids_by_year_dict()
 
